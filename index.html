@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Web OS Desktop</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="desktop">
+
+    <!-- Desktop icons -->
+    <div class="desktop-icons">
+      <div class="desktop-icon" data-app="notes">
+        <div class="icon-box">📝</div>
+        <span>Notes</span>
+      </div>
+
+      <div class="desktop-icon" data-app="files">
+        <div class="icon-box">📁</div>
+        <span>Files</span>
+      </div>
+
+      <div class="desktop-icon" data-app="browser">
+        <div class="icon-box">🌐</div>
+        <span>Browser</span>
+      </div>
+    </div>
+
+    <!-- Start Menu -->
+    <div class="start-menu" id="startMenu">
+      <div class="start-header">
+        <h3>Web OS</h3>
+        <p>Mini desktop simulator</p>
+      </div>
+
+      <div class="start-apps">
+        <button class="menu-app" data-app="notes">📝 Notes</button>
+        <button class="menu-app" data-app="files">📁 File Manager</button>
+        <button class="menu-app" data-app="browser">🌐 Browser</button>
+      </div>
+    </div>
+
+    <!-- Windows -->
+    <div class="window app-window" id="notesWindow">
+      <div class="window-top">
+        <div class="window-title">📝 Notes</div>
+        <div class="window-actions">
+          <button class="min-btn" data-target="notesWindow">—</button>
+          <button class="close-btn" data-target="notesWindow">✕</button>
+        </div>
+      </div>
+      <div class="window-body">
+        <textarea placeholder="Write your note here..."></textarea>
+      </div>
+    </div>
+
+    <div class="window app-window" id="filesWindow">
+      <div class="window-top">
+        <div class="window-title">📁 File Manager</div>
+        <div class="window-actions">
+          <button class="min-btn" data-target="filesWindow">—</button>
+          <button class="close-btn" data-target="filesWindow">✕</button>
+        </div>
+      </div>
+      <div class="window-body files-body">
+        <div class="fake-folder">📂 Projects</div>
+        <div class="fake-folder">📂 Images</div>
+        <div class="fake-folder">📂 Documents</div>
+        <div class="fake-folder">📂 Downloads</div>
+      </div>
+    </div>
+
+    <div class="window app-window" id="browserWindow">
+      <div class="window-top">
+        <div class="window-title">🌐 Browser</div>
+        <div class="window-actions">
+          <button class="min-btn" data-target="browserWindow">—</button>
+          <button class="close-btn" data-target="browserWindow">✕</button>
+        </div>
+      </div>
+      <div class="window-body browser-body">
+        <div class="browser-bar">Search the web...</div>
+        <div class="browser-content">
+          <h2>Welcome to Web OS</h2>
+          <p>This is your browser-like app window.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Taskbar -->
+    <div class="taskbar">
+      <div class="taskbar-left">
+        <button class="start-btn" id="startBtn">⬢</button>
+
+        <button class="task-app" data-app="notes">📝</button>
+        <button class="task-app" data-app="files">📁</button>
+        <button class="task-app" data-app="browser">🌐</button>
+      </div>
+
+      <div class="taskbar-right">
+        <span id="clock">00:00</span>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
