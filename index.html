@@ -3,103 +3,60 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Web OS Desktop</title>
+  <title>Web OS 2.0 — Desktop Environment</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="desktop">
+  <div class="desktop" id="desktop">
 
-    <!-- Desktop icons -->
-    <div class="desktop-icons">
-      <div class="desktop-icon" data-app="notes">
-        <div class="icon-box">📝</div>
-        <span>Notes</span>
-      </div>
+    <!-- Desktop icons (rendered from the app registry by script.js) -->
+    <div class="desktop-icons" id="desktopIcons"></div>
 
-      <div class="desktop-icon" data-app="files">
-        <div class="icon-box">📁</div>
-        <span>Files</span>
-      </div>
+    <!-- Open application windows (managed by the window manager) -->
+    <div id="windowsLayer"></div>
 
-      <div class="desktop-icon" data-app="browser">
-        <div class="icon-box">🌐</div>
-        <span>Browser</span>
-      </div>
-    </div>
-
-    <!-- Start Menu -->
+    <!-- Start Menu (launcher grid + search) -->
     <div class="start-menu" id="startMenu">
       <div class="start-header">
         <h3>Web OS</h3>
-        <p>Mini desktop simulator</p>
+        <p>Desktop environment in the browser — v2.0</p>
       </div>
-
-      <div class="start-apps">
-        <button class="menu-app" data-app="notes">📝 Notes</button>
-        <button class="menu-app" data-app="files">📁 File Manager</button>
-        <button class="menu-app" data-app="browser">🌐 Browser</button>
-      </div>
+      <input type="text" id="startSearch" class="start-search"
+             placeholder="Search apps and files…  (Ctrl+K)" autocomplete="off" />
+      <div class="start-section-label">Apps</div>
+      <div class="start-grid" id="startApps"></div>
+      <div class="start-section-label" id="startFilesLabel" hidden>Files</div>
+      <div class="start-files" id="startFiles"></div>
     </div>
 
-    <!-- Windows -->
-    <div class="window app-window" id="notesWindow">
-      <div class="window-top">
-        <div class="window-title">📝 Notes</div>
-        <div class="window-actions">
-          <button class="min-btn" data-target="notesWindow">—</button>
-          <button class="close-btn" data-target="notesWindow">✕</button>
-        </div>
+    <!-- Notification Center panel -->
+    <div class="notif-panel" id="notifPanel">
+      <div class="notif-panel-head">
+        <strong>Notifications</strong>
+        <button class="os-btn ghost notif-clear">Clear all</button>
       </div>
-      <div class="window-body">
-        <textarea placeholder="Write your note here..."></textarea>
-      </div>
+      <div class="notif-list" id="notifList"></div>
     </div>
 
-    <div class="window app-window" id="filesWindow">
-      <div class="window-top">
-        <div class="window-title">📁 File Manager</div>
-        <div class="window-actions">
-          <button class="min-btn" data-target="filesWindow">—</button>
-          <button class="close-btn" data-target="filesWindow">✕</button>
-        </div>
-      </div>
-      <div class="window-body files-body">
-        <div class="fake-folder">📂 Projects</div>
-        <div class="fake-folder">📂 Images</div>
-        <div class="fake-folder">📂 Documents</div>
-        <div class="fake-folder">📂 Downloads</div>
-      </div>
-    </div>
+    <!-- Calendar panel (clock popup) -->
+    <div class="calendar-panel" id="calendarPanel"></div>
 
-    <div class="window app-window" id="browserWindow">
-      <div class="window-top">
-        <div class="window-title">🌐 Browser</div>
-        <div class="window-actions">
-          <button class="min-btn" data-target="browserWindow">—</button>
-          <button class="close-btn" data-target="browserWindow">✕</button>
-        </div>
-      </div>
-      <div class="window-body browser-body">
-        <div class="browser-bar">Search the web...</div>
-        <div class="browser-content">
-          <h2>Welcome to Web OS</h2>
-          <p>This is your browser-like app window.</p>
-        </div>
-      </div>
-    </div>
+    <!-- Desktop right-click context menu -->
+    <div class="context-menu" id="contextMenu"></div>
+
+    <!-- Notification toasts -->
+    <div class="notifications" id="notifications"></div>
 
     <!-- Taskbar -->
     <div class="taskbar">
       <div class="taskbar-left">
-        <button class="start-btn" id="startBtn">⬢</button>
-
-        <button class="task-app" data-app="notes">📝</button>
-        <button class="task-app" data-app="files">📁</button>
-        <button class="task-app" data-app="browser">🌐</button>
+        <button class="start-btn" id="startBtn" title="Start (Ctrl+K)">⬢</button>
+        <div class="task-apps" id="taskApps"></div>
       </div>
-
       <div class="taskbar-right">
-        <span id="clock">00:00</span>
+        <button class="tray-btn" id="notifBell" title="Notifications">🔔<span class="badge" id="notifBadge" hidden></span></button>
+        <span id="clockDate"></span>
+        <button class="tray-btn clock-btn" id="clockBtn" title="Calendar"><span id="clock">--:--</span></button>
       </div>
     </div>
 
