@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Web OS 3.0</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="desktop" id="desktop">
+
+    <div class="desktop-icons" id="desktopIcons"></div>
+
+    <div id="widgets"></div>
+
+    <div id="windowsLayer"></div>
+
+    <div class="start-menu" id="startMenu">
+      <div class="start-header">
+        <h3>Web OS</h3>
+        <p>Desktop environment in the browser — v3.0</p>
+      </div>
+      <input type="text" id="startSearch" class="start-search"
+             placeholder="Search apps and files…  (Ctrl+K)" autocomplete="off" />
+      <div class="start-section-label">Apps</div>
+      <div class="start-grid" id="startApps"></div>
+      <div class="start-section-label" id="startFilesLabel" hidden>Files</div>
+      <div class="start-files" id="startFiles"></div>
+      <div class="start-footer">
+        <button class="os-btn tiny ghost" id="restartBtn">🔄 Restart</button>
+        <button class="os-btn tiny ghost" id="shutdownBtn">⏻ Shut down</button>
+        <span class="footer-version">v3.0</span>
+      </div>
+    </div>
+
+    <div class="notif-panel" id="notifPanel">
+      <div class="notif-panel-head">
+        <strong>Notifications</strong>
+        <button class="os-btn ghost notif-clear">Clear all</button>
+      </div>
+      <div class="notif-list" id="notifList"></div>
+    </div>
+
+    <div class="calendar-panel" id="calendarPanel"></div>
+
+    <div class="context-menu" id="contextMenu"></div>
+
+    <div class="notifications" id="notifications"></div>
+
+    <div class="taskbar">
+      <div class="taskbar-left">
+        <button class="start-btn" id="startBtn" title="Start (Ctrl+K)">⬢</button>
+        <div class="task-apps" id="taskApps"></div>
+      </div>
+      <div class="taskbar-right">
+        <button class="tray-btn" id="notifBell" title="Notifications">🔔<span class="badge" id="notifBadge" hidden></span></button>
+        <span id="clockDate"></span>
+        <button class="tray-btn clock-btn" id="clockBtn" title="Calendar"><span id="clock">--:--</span></button>
+      </div>
+    </div>
+
+    <div class="boot-screen" id="bootScreen">
+      <div class="boot-logo">⬢</div>
+      <div class="boot-bar"><div class="boot-fill"></div></div>
+      <div class="boot-hint">click to skip</div>
+    </div>
+
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
