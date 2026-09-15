@@ -12,6 +12,43 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"
 const timeAgo=ts=>{if(!ts)return"";const s=Math.floor((Date.now()-ts)/1000);if(s<60)return"just now";if(s<3600)return Math.floor(s/60)+"m ago";if(s<86400)return Math.floor(s/3600)+"h ago";return new Date(ts).toLocaleDateString()};
 const fmtNum=n=>{if(!isFinite(n))return"Error";if(Math.abs(n)>=1e12)return n.toExponential(6);const r=Math.round(n*1e10)/1e10;return String(r)};
 function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)}}
+const _scriptLoads={};
+function loadScript(src){
+  if(_scriptLoads[src])return _scriptLoads[src];
+  const p=new Promise((resolve,reject)=>{
+    const existing=document.querySelector(`script[src="${src}"]`);
+    if(existing){
+      if(existing.dataset.loaded==="1")return resolve();
+      existing.addEventListener("load",()=>resolve());
+      existing.addEventListener("error",()=>reject(new Error("Could not load "+src+" (are you offline?)")));
+      return;
+    }
+    const s=document.createElement("script");s.src=src;
+    s.onload=()=>{s.dataset.loaded="1";resolve()};
+    s.onerror=()=>reject(new Error("Could not load "+src+" (are you offline?)"));
+    document.head.appendChild(s);
+  });
+  _scriptLoads[src]=p;
+  return p;
+}
+function ensureJSZip(){
+  return window.JSZip?Promise.resolve(window.JSZip):loadScript("https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js").then(()=>window.JSZip);
+}
+const TEXT_EXT=/\.(txt|md|js|json|css|html|htm|xml|csv|ts|jsx|tsx|py|c|cpp|h|sh|yml|yaml|svg|log)$/i;
+const MIME_EXT={png:"image/png",jpg:"image/jpeg",jpeg:"image/jpeg",gif:"image/gif",webp:"image/webp",svg:"image/svg+xml",pdf:"application/pdf",mp3:"audio/mpeg",wav:"audio/wav",mp4:"video/mp4",webm:"video/webm",zip:"application/zip",ico:"image/x-icon",bmp:"image/bmp"};
+const mimeFor=name=>MIME_EXT[(name.split(".").pop()||"").toLowerCase()]||"application/octet-stream";
+function readDroppedFile(file){
+  return new Promise(resolve=>{
+    const reader=new FileReader();
+    reader.onload=()=>resolve(reader.result);
+    if(TEXT_EXT.test(file.name))reader.readAsText(file);else reader.readAsDataURL(file);
+  });
+}
+function uniqueChildName(folderNode,name){
+  let n=name,idx=2;
+  while(folderNode.children[n]){const dot=n.lastIndexOf(".");n=(dot>0?n.slice(0,dot):n)+" ("+(idx++)+")"+(dot>0?n.slice(dot):"")}
+  return n;
+}
 const isTouch=("ontouchstart"in window)||navigator.maxTouchPoints>0;
 const APP_REGISTRY={};
 let desktopIcons=[];
@@ -55,9 +92,11 @@ const WM={
     const winObj={id:winId,app:id,el,minimized:false,maximized:false,preMax:null,args};
     this.windows[winId]=winObj;
     if(def.init){try{def.init(body,winObj,args)}catch(e){console.error(e);body.innerHTML=`<div style="color:var(--red)">App error: ${esc(e.message)}</div>`}}
+    if(Settings.get().winAnim){el.classList.add("opening");requestAnimationFrame(()=>requestAnimationFrame(()=>el.classList.remove("opening")))}
     el.classList.add("show");
     this.focus(winId);
     Taskbar.refresh();
+    SFX.open();
     return winObj;
   },
   focus(winId){
@@ -69,16 +108,40 @@ const WM={
     if(typeof Widgets!=="undefined")Widgets.ticker&&Widgets.ticker();
   },
   focused(){return this.activeId},
-  minimize(winId){const w=this.windows[winId];if(!w)return;w.minimized=true;w.el.classList.remove("show");Taskbar.refresh()},
+  minimize(winId){
+    const w=this.windows[winId];if(!w)return;
+    SFX.minimize();
+    if(Settings.get().winAnim){
+      const tbBtn=$(`.task-app[data-win="${winId}"]`);
+      if(tbBtn){
+        const tr=tbBtn.getBoundingClientRect(),wr=w.el.getBoundingClientRect();
+        const dx=(tr.left+tr.width/2)-(wr.left+wr.width/2),dy=(tr.top+tr.height/2)-(wr.top+wr.height/2);
+        w.el.style.transformOrigin="center center";
+        w.el.style.transition="transform .22s ease,opacity .22s ease";
+        w.el.style.transform=`translate(${dx}px,${dy}px) scale(.12)`;
+        w.el.style.opacity="0";
+        setTimeout(()=>{w.minimized=true;w.el.classList.remove("show");w.el.style.transform="";w.el.style.opacity="";w.el.style.transition="";Taskbar.refresh()},220);
+        return;
+      }
+    }
+    w.minimized=true;w.el.classList.remove("show");Taskbar.refresh();
+  },
   restore(winId){const w=this.windows[winId];if(!w)return;w.minimized=false;w.el.classList.add("show");this.focus(winId)},
   close(winId){
     const w=this.windows[winId];if(!w)return;
     const def=App.get(w.app);
     if(def&&def.onClose)try{def.onClose(w)}catch{}
-    w.el.remove();delete this.windows[winId];
-    if(this.activeId===winId)this.activeId=null;
-    Object.values(this.windows).filter(x=>!x.minimized).sort((a,b)=>(parseFloat(b.el.style.zIndex)||0)-(parseFloat(a.el.style.zIndex)||0))[0]&&this.focus(Object.values(this.windows).filter(x=>!x.minimized).sort((a,b)=>(parseFloat(b.el.style.zIndex)||0)-(parseFloat(a.el.style.zIndex)||0))[0].id);
-    Taskbar.refresh();saveWinState();
+    SFX.close();
+    const finish=()=>{
+      w.el.remove();delete this.windows[winId];
+      if(this.activeId===winId)this.activeId=null;
+      Object.values(this.windows).filter(x=>!x.minimized).sort((a,b)=>(parseFloat(b.el.style.zIndex)||0)-(parseFloat(a.el.style.zIndex)||0))[0]&&this.focus(Object.values(this.windows).filter(x=>!x.minimized).sort((a,b)=>(parseFloat(b.el.style.zIndex)||0)-(parseFloat(a.el.style.zIndex)||0))[0].id);
+      Taskbar.refresh();saveWinState();
+    };
+    if(Settings.get().winAnim&&!w.minimized){
+      w.el.classList.add("closing");
+      setTimeout(finish,160);
+    }else finish();
   },
   toggleMax(winId){
     const w=this.windows[winId];if(!w)return;
@@ -95,29 +158,67 @@ const WM={
       saveWinState();
     }
   },
+  snapRect(region){
+    const dw=$("#desktop").clientWidth,dh=$("#desktop").clientHeight;
+    const tileH=Math.floor((dh-varPx("--taskbar-h")-28)/2),tileW=Math.floor(dw/2);
+    const rects={
+      left:{l:14,t:14,w:tileW-21,h:tileH*2-14},
+      right:{l:dw/2+7,t:14,w:tileW-21,h:tileH*2-14},
+      tl:{l:14,t:14,w:tileW-21,h:tileH-21},
+      tr:{l:dw/2+7,t:14,w:tileW-21,h:tileH-21},
+      bl:{l:14,t:tileH+21,w:tileW-21,h:tileH-21},
+      br:{l:dw/2+7,t:tileH+21,w:tileW-21,h:tileH-21},
+      max:{l:0,t:0,w:dw,h:dh-varPx("--taskbar-h")-28}
+    };
+    return rects[region];
+  },
   snap(winId,region){
     const w=this.windows[winId];if(!w)return;
-    const el=w.el;const dw=$("#desktop").clientWidth,dh=$("#desktop").clientHeight;
-    const tileH=Math.floor((dh-varPx("--taskbar-h")-28)/2);
-    const tileW=Math.floor(dw/2);
+    const el=w.el;
     w.preMax={l:el.style.left,t:el.style.top,w:el.style.width,h:el.style.height};
     el.classList.remove("maximized");
-    if(region==="left"){el.style.left="14px";el.style.top="14px";el.style.width=tileW-21+"px";el.style.height=tileH-21+"px"}
-    else if(region==="right"){el.style.left=(dw/2+7)+"px";el.style.top="14px";el.style.width=tileW-21+"px";el.style.height=tileH-21+"px"}
-    else if(region==="max"){el.classList.add("maximized");el.querySelector(".max").textContent="❐"}
+    if(region==="max"){el.classList.add("maximized");el.querySelector(".max").textContent="❐";saveWinState();return}
+    const r=this.snapRect(region);if(!r)return;
+    el.style.left=r.l+"px";el.style.top=r.t+"px";el.style.width=r.w+"px";el.style.height=r.h+"px";
     saveWinState();
+  },
+  snapRegionAt(x,y){
+    const desktop=$("#desktop"),dw=desktop.clientWidth,dh=desktop.clientHeight;
+    const edge=28,corner=90;
+    const nearLeft=x<edge,nearRight=x>dw-edge,nearTop=y<edge,nearBottom=y>dh-edge;
+    if(nearTop&&x<corner)return"tl";
+    if(nearTop&&x>dw-corner)return"tr";
+    if(nearBottom&&x<corner)return"bl";
+    if(nearBottom&&x>dw-corner)return"br";
+    if(nearTop)return"max";
+    if(nearLeft)return"left";
+    if(nearRight)return"right";
+    return null;
+  },
+  ghost(region){
+    let g=$("#snapGhost");
+    if(!region){if(g)g.classList.remove("show");return}
+    if(!g){g=document.createElement("div");g.id="snapGhost";g.className="snap-ghost";$("#desktop").appendChild(g)}
+    const r=this.snapRect(region);if(!r)return;
+    g.style.left=r.l+"px";g.style.top=r.t+"px";g.style.width=r.w+"px";g.style.height=r.h+"px";
+    g.classList.add("show");
   },
   dragStart(el,pid,e){
     try{el.querySelector(".window-top").setPointerCapture(pid)}catch{}
     const sx=e.clientX,sy=e.clientY;
     const ol=parseFloat(el.style.left)||0,ot=parseFloat(el.style.top)||0;
     const desktop=$("#desktop");
+    let pendingRegion=null;
     function move(ev){
       if(ev.pointerId!==pid)return;
       let nl=ol+(ev.clientX-sx),nt=ot+(ev.clientY-sy);
       nl=Math.max(-el.offsetWidth+80,Math.min(nl,desktop.clientWidth-80));
       nt=Math.max(0,Math.min(nt,desktop.clientHeight-80));
       el.style.left=nl+"px";el.style.top=nt+"px";
+      if(Settings.get().snapEnabled){
+        pendingRegion=WM.snapRegionAt(ev.clientX,ev.clientY);
+        WM.ghost(pendingRegion);
+      }
     }
     function up(ev){
       if(ev.pointerId!==pid)return;
@@ -125,11 +226,10 @@ const WM={
       el.querySelector(".window-top").removeEventListener("pointerup",up);
       el.querySelector(".window-top").removeEventListener("pointercancel",up);
       try{el.querySelector(".window-top").releasePointerCapture(pid)}catch{}
+      WM.ghost(null);
       saveWinState();
-      if(ev.clientY<5&&!el.classList.contains("maximized"))WM.snap(WM.windows["win-"+el.id.split("-")[1]].id,"max");
-      else if(ev.clientY>(desktop.clientHeight-30)&&!el.classList.contains("maximized")){
-        const r=ev.clientX<desktop.clientWidth/2?"left":"right";
-        WM.snap(WM.windows["win-"+el.id.split("-")[1]].id,r);
+      if(pendingRegion&&Settings.get().snapEnabled&&!el.classList.contains("maximized")){
+        WM.snap(WM.windows["win-"+el.id.split("-")[1]].id,pendingRegion);
       }
     }
     el.querySelector(".window-top").addEventListener("pointermove",move);
@@ -183,6 +283,7 @@ const NotifCenter={
   push(title,msg,icon="🔔",sticky=false){
     const l=this.list();l.unshift({title,msg,icon,at:Date.now(),read:false});this.save(l);this.unread++;this.renderBadge();
     toast(title,msg,icon,sticky);
+    SFX.notif();
   },
   log(title,msg,icon="🔔"){
     const l=this.list();l.unshift({title,msg,icon,at:Date.now(),read:false});this.save(l);this.unread++;this.renderBadge();
@@ -229,7 +330,7 @@ function actionToast(title,msg,icon,actionLabel,callback,timeout=6000){
   el.querySelector(".toast-action").addEventListener("click",()=>{clearTimeout(t);finish();callback&&callback()});
 }
 const Settings={
-  defaults:{wallpaper:"aurora",theme:"dark",accent:"purple",winStyle:"glass",iconSize:"medium",showIcons:true,widgets:true,density:"comfortable",fontSize:15,snapEnabled:true,sounds:true,deviceName:"WebOS Device",highContrast:false,reduceMotion:false,largeTargets:false},
+  defaults:{wallpaper:"aurora",theme:"dark",accent:"purple",winStyle:"glass",iconSize:"medium",showIcons:true,widgets:true,density:"comfortable",fontSize:15,snapEnabled:true,sounds:true,winAnim:true,deviceName:"WebOS Device",highContrast:false,reduceMotion:false,largeTargets:false},
   get(){return Object.assign({},this.defaults,Store.get("settings",{}))},
   set(p){Store.set("settings",Object.assign(this.get(),p));this.apply()},
   apply(){
@@ -241,7 +342,15 @@ const Settings={
     r.style.setProperty("--win-opacity",s.winStyle==="solid"?"1":".82");
     const wp=WALLPAPERS[s.wallpaper]||WALLPAPERS.aurora;
     $("#desktop").style.background=wp.css;
-    document.body.dataset.theme=s.theme;
+    let resolvedTheme=s.theme;
+    if(s.theme==="auto"){
+      resolvedTheme=(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches===false)?"light":"dark";
+      if(!this._autoListener&&window.matchMedia){
+        this._autoListener=true;
+        try{window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{if(Settings.get().theme==="auto")Settings.apply()})}catch{}
+      }
+    }
+    document.body.dataset.theme=resolvedTheme;
     document.body.dataset.winstyle=s.winStyle;
     document.body.dataset.iconsize=s.iconSize;
     document.body.dataset.icons=s.showIcons?"visible":"hidden";
@@ -254,6 +363,29 @@ const Settings={
   }
 };
 function hexToRgba(h,a){const n=parseInt(h.slice(1),16);return"rgba("+((n>>16)&255)+","+((n>>8)&255)+","+(n&255)+","+a+")"}
+const SFX={
+  ctx:null,
+  ensure(){if(!this.ctx){try{this.ctx=new(window.AudioContext||window.webkitAudioContext)()}catch{return null}}if(this.ctx.state==="suspended")this.ctx.resume();return this.ctx},
+  tone(freq,dur,type="sine",vol=0.05,delay=0){
+    if(!Settings.get().sounds)return;
+    const ctx=this.ensure();if(!ctx)return;
+    const t0=ctx.currentTime+delay;
+    const osc=ctx.createOscillator(),gain=ctx.createGain();
+    osc.type=type;osc.frequency.setValueAtTime(freq,t0);
+    gain.gain.setValueAtTime(0,t0);
+    gain.gain.linearRampToValueAtTime(vol,t0+0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t0);osc.stop(t0+dur+0.02);
+  },
+  open(){this.tone(420,0.09,"sine",0.05);this.tone(640,0.11,"sine",0.045,0.05)},
+  close(){this.tone(500,0.09,"sine",0.045);this.tone(300,0.11,"sine",0.04,0.05)},
+  minimize(){this.tone(380,0.08,"triangle",0.04)},
+  click(){this.tone(700,0.035,"square",0.02)},
+  notif(){this.tone(760,0.09,"sine",0.05);this.tone(1020,0.13,"sine",0.045,0.09)},
+  error(){this.tone(200,0.16,"sawtooth",0.05);this.tone(140,0.2,"sawtooth",0.05,0.08)},
+  startup(){this.tone(300,0.14,"sine",0.05);this.tone(450,0.14,"sine",0.045,0.1);this.tone(600,0.18,"sine",0.045,0.2)}
+};
 const WALLPAPERS={
   aurora:{label:"Aurora",css:"radial-gradient(circle at top left,rgba(122,92,255,.35),transparent 30%),radial-gradient(circle at top right,rgba(255,77,166,.25),transparent 30%),linear-gradient(135deg,#111325,#1a1140 45%,#0e1d3a)"},
   sunset:{label:"Sunset",css:"radial-gradient(circle at 20% 80%,rgba(255,120,60,.4),transparent 40%),linear-gradient(135deg,#2b0f2e,#4a1445 45%,#1a0b33)"},
@@ -318,7 +450,7 @@ const VFS={
   count(node=this.data){if(node.type==="file")return 1;return Object.values(node.children||{}).reduce((s,c)=>s+this.count(c),0)},
   defaultTree(){const t=Date.now();return{type:"folder",name:"Home",created:t,modified:t,children:{
     Documents:{type:"folder",name:"Documents",created:t,modified:t,children:{
-      "welcome.txt":{type:"file",name:"welcome.txt",created:t,modified:t,content:"Welcome to Web OS 4.1!\n\nV4.1 brings:\n  * Camera app — front/back switch, zoom, photo & video capture\n  * File Manager: multi-select and Move to…\n  * Device name and Accessibility settings\n  * Cleaner mobile taskbar and notifications\n  * Desktop icon layout closer to a real OS\n"}
+      "welcome.txt":{type:"file",name:"welcome.txt",created:t,modified:t,content:"Welcome to Web OS 4.2!\n\nV4.2 brings:\n  * Terminal, Code Editor & PDF Viewer — install from the App Store\n  * Real window snapping (drag to edges/corners) + Alt-Tab switcher\n  * Task Manager (Ctrl+Shift+Esc) with live processes\n  * Drag & drop file uploads and .zip compress/extract in File Manager\n  * Sound effects, window animations, and an Auto (system) theme\n"}
     }},
     Pictures:{type:"folder",name:"Pictures",created:t,modified:t,children:{}},
     Music:{type:"folder",name:"Music",created:t,modified:t,children:{}},
@@ -439,6 +571,8 @@ const Taskbar={
       const btn=document.createElement("button");
       btn.className="tb-btn open"+(w.id===WM.activeId&&!w.minimized?" focused":"");
       btn.title=def.title;
+      btn.dataset.win=w.id;
+      btn.classList.add("task-app");
       btn.innerHTML=`<span>${def.icon}</span>`;
       btn.addEventListener("click",()=>{
         if(w.minimized)WM.restore(w.id);
@@ -464,7 +598,7 @@ const ICON_COLORS={
   notes:"#ffc857",files:"#4db8ff",trash:"#8a93a6",calculator:"#3ecf8e",
   browser:"#4d7dff",settings:"#8a93a6",paint:"#ff4da6",weather:"#4db8ff",
   music:"#7a5cff",game:"#ff9f43",store:"#3ecf8e",sysinfo:"#7a5cff",about:"#ff5c5c",
-  camera:"#3a3d46"
+  camera:"#3a3d46",taskmgr:"#ff6b6b",editor:"#2f6fed",terminal:"#1c1c22",pdfviewer:"#e5484d"
 };
 function renderDesktopIcons(){
   const box=$("#desktopIcons");if(!box)return;
@@ -472,7 +606,7 @@ function renderDesktopIcons(){
   if(!Settings.get().showIcons)return;
   desktopIcons=[];
   const installed=Store.get("installed",INSTALLED_DEFAULT);
-  const order=["notes","files","trash","calculator","browser","camera","settings","paint","weather","music","game","store","sysinfo","about"];
+  const order=["notes","files","trash","calculator","browser","camera","taskmgr","settings","paint","weather","music","game","store","sysinfo","about"];
   order.concat(installed).forEach(id=>{
     if(desktopIcons.includes(id))return;
     const def=App.get(id);if(!def||(!def.core&&!installed.includes(id)))return;
@@ -579,9 +713,14 @@ App.register("files",{
         <button class="btn ghost tiny files-cut">✂️ Cut</button>
         <button class="btn ghost tiny files-paste">📌 Paste</button>
         <button class="btn ghost tiny files-move">🗂️ Move to…</button>
+        <button class="btn ghost tiny files-openwith">🚀 Open with…</button>
+        <button class="btn ghost tiny files-compress">🗜️ Compress</button>
+        <button class="btn ghost tiny files-extract">📦 Extract</button>
+        <button class="btn ghost tiny files-upload">⬆️ Upload…</button>
         <button class="btn ghost tiny files-delete">🗑️ Delete</button>
       </div>
       <div class="folder-grid"></div>
+      <input type="file" class="files-upload-input" multiple hidden>
       <div style="font-size:11px;color:var(--muted);display:flex;justify-content:space-between"><span class="files-stats">0 items</span><span class="files-clip"></span></div>
     </div>`,
   init(body){
@@ -648,16 +787,31 @@ App.register("files",{
       input.addEventListener("keydown",e=>{if(e.key==="Enter")commit();if(e.key==="Escape")cancel()});
       input.addEventListener("blur",commit);
     };
+    const openWithApp=(item,appId)=>{
+      const def=App.get(appId);
+      if(!def){NotifCenter.push("File Manager","App not available.","📁");return}
+      if(!def.core&&!Installer.isInstalled(appId)){NotifCenter.push("File Manager",`Install "${def.title}" from the App Store to open this.`,def.icon);return}
+      const winObj=WM.open(appId,{path:cwd.slice(),name:item.name});
+      if(winObj){
+        if(appId==="editor"&&winObj.openFile)winObj.openFile(cwd.slice(),item.name);
+        if(appId==="pdfviewer"&&winObj.openPdf)winObj.openPdf(cwd.slice(),item.name);
+      }
+    };
+    const CODE_EXT=/\.(js|json|css|html|ts|jsx|tsx|py|c|cpp|sh|xml|yml|yaml|md)$/i;
     const openItem=item=>{
       if(item.type==="folder"){cwd=[...cwd,item.name];searchEl.value="";selSet.clear();VFS.renderCurrent();return}
       if(item.name.startsWith("launch-")&&item.name.endsWith(".app")){
         const data=parseAppFile(item);if(data){WM.open(data.appId);return}
       }
+      if(/\.zip$/i.test(item.name)){NotifCenter.push("File Manager","This is an archive — select it and click Extract.","🗜️");return}
+      if(/\.pdf$/i.test(item.name)){openWithApp(item,"pdfviewer");return}
       if(/\.(png|jpg|jpeg|gif|webp)$/i.test(item.name)&&(item.content||"").startsWith("data:")){
         WM.open("paint",{});const win=WM.windows["win-paint"];
         if(win){setTimeout(()=>{const cv=win.el.querySelector("canvas");if(cv){const ctx=cv.getContext("2d"),im=new Image();im.onload=()=>{ctx.clearRect(0,0,cv.width,cv.height);ctx.drawImage(im,0,0,cv.width,cv.height)};im.src=item.content}},30)}
         return;
       }
+      if((item.content||"").startsWith&&(item.content||"").startsWith("data:")){NotifCenter.push("File Manager","This file type can't be previewed yet.","📄");return}
+      if(CODE_EXT.test(item.name)&&item.name.split(".").pop().toLowerCase()!=="md"){openWithApp(item,"editor");return}
       const content=VFS.readFile(cwd,item.name);
       WM.open("notes",{note:`${cwd.length?cwd.join("/")+"/":""}${item.name}`});
       const win=WM.windows["win-notes"];
@@ -721,6 +875,107 @@ App.register("files",{
         actionToast("File deleted",`${n} item${n===1?"":"s"} moved to Recycle Bin.`,"🗑️","Undo",undo,7000);
       }
     });
+    body.querySelector(".files-openwith").addEventListener("click",()=>{
+      if(selSet.size!==1){NotifCenter.push("File Manager","Select exactly one file.","🚀");return}
+      const name=[...selSet][0];const node=VFS.resolve(cwd).children[name];
+      if(!node||node.type==="folder"){NotifCenter.push("File Manager","Pick a file, not a folder.","🚀");return}
+      const isImg=/\.(png|jpg|jpeg|gif|webp)$/i.test(name),isPdf=/\.pdf$/i.test(name),isCode=CODE_EXT.test(name);
+      const candidates=[["notes","Notes"],["editor","Code Editor"],isImg?["paint","Paint"]:null,isPdf?["pdfviewer","PDF Viewer"]:null].filter(Boolean);
+      const menu=$("#contextMenu");
+      menu.innerHTML=candidates.map(([id,label],i)=>{const def=App.get(id);return`<button class="context-item" data-id="${id}"><span class="ctx-icon">${def?def.icon:"📦"}</span><span>${esc(label)}</span></button>`}).join("");
+      const btn=body.querySelector(".files-openwith"),r=btn.getBoundingClientRect();
+      menu.style.left=r.left+"px";menu.style.top=(r.bottom+4)+"px";menu.classList.add("show");
+      const onPick=e=>{
+        const it=e.target.closest(".context-item");menu.classList.remove("show");menu.removeEventListener("click",onPick);
+        if(!it)return;
+        const id=it.dataset.id;
+        if(id==="notes"){openApp("notes");const win=WM.windows["win-notes"];const content=VFS.readFile(cwd,name);if(win){setTimeout(()=>{const t=win.el.querySelector(".notes-title"),a=win.el.querySelector(".notes-area");if(t)t.value=name;if(a)a.value=content||""},30)}return}
+        openWithApp(node,id);
+      };
+      menu.addEventListener("click",onPick);
+    });
+    body.querySelector(".files-compress").addEventListener("click",async()=>{
+      if(!selSet.size){NotifCenter.push("File Manager","Select item(s) to compress.","🗜️");return}
+      const names=[...selSet];
+      try{
+        const JSZip=await ensureJSZip();
+        const zip=new JSZip();
+        const addNode=(zf,node)=>{
+          if(node.type==="file"){
+            const c=node.content||"";
+            if(c.startsWith&&c.startsWith("data:"))zf.file(node.name,c.split(",")[1],{base64:true});
+            else zf.file(node.name,c);
+          }else{
+            const sub=zf.folder(node.name);
+            Object.values(node.children||{}).forEach(ch=>addNode(sub,ch));
+          }
+        };
+        const folder=VFS.resolve(cwd);
+        names.forEach(name=>{const node=folder.children[name];if(node)addNode(zip,node)});
+        const base64=await zip.generateAsync({type:"base64"});
+        const zipName=uniqueChildName(folder,(names.length===1?names[0].replace(/\.[^.]+$/,""):"Archive")+".zip");
+        VFS.createFile(cwd,zipName,"data:application/zip;base64,"+base64);
+        selSet.clear();VFS.renderCurrent();refreshAll();
+        NotifCenter.push("File Manager",`Created "${zipName}".`,"🗜️");
+      }catch(err){NotifCenter.push("File Manager","Compress failed: "+err.message,"⚠️")}
+    });
+    body.querySelector(".files-extract").addEventListener("click",async()=>{
+      if(selSet.size!==1){NotifCenter.push("File Manager","Select exactly one .zip file.","📦");return}
+      const name=[...selSet][0];
+      if(!/\.zip$/i.test(name)){NotifCenter.push("File Manager","Select a .zip file to extract.","📦");return}
+      const content=VFS.readFile(cwd,name);
+      if(!content){NotifCenter.push("File Manager","Couldn't read archive.","⚠️");return}
+      try{
+        const JSZip=await ensureJSZip();
+        const base64=content.split(",")[1]||content;
+        const zip=await JSZip.loadAsync(base64,{base64:true});
+        const destName=uniqueChildName(VFS.resolve(cwd),name.replace(/\.zip$/i,""));
+        VFS.createFolder(cwd,destName);
+        const destPath=[...cwd,destName];
+        const entries=Object.values(zip.files);
+        // If every entry sits under one common top-level folder (the usual "zip of a
+        // single project folder" case), unwrap it instead of nesting it a second time.
+        const topSegs=new Set(entries.map(e=>e.name.split("/").filter(Boolean)[0]).filter(Boolean));
+        const singleRoot=entries.length&&topSegs.size===1?[...topSegs][0]:null;
+        for(const entry of entries){
+          let parts=entry.name.split("/").filter(Boolean);
+          if(singleRoot&&parts[0]===singleRoot)parts=parts.slice(1);
+          const fname=parts.pop();
+          let folderPath=destPath;
+          for(const p of parts){
+            if(!VFS.resolve([...folderPath,p]))VFS.createFolder(folderPath,p);
+            folderPath=[...folderPath,p];
+          }
+          if(entry.dir||!fname)continue;
+          const isText=TEXT_EXT.test(fname);
+          const data=isText?await entry.async("text"):`data:${mimeFor(fname)};base64,`+await entry.async("base64");
+          VFS.createFile(folderPath,fname,data);
+        }
+        selSet.clear();VFS.renderCurrent();refreshAll();
+        NotifCenter.push("File Manager",`Extracted to "${destName}".`,"📦");
+      }catch(err){NotifCenter.push("File Manager","Extract failed: "+err.message,"⚠️")}
+    });
+    const uploadInput=body.querySelector(".files-upload-input");
+    const uploadFiles=async fileList=>{
+      const files=[...fileList];if(!files.length)return;
+      let count=0;
+      for(const f of files){
+        const content=await readDroppedFile(f);
+        const name=uniqueChildName(VFS.resolve(cwd),f.name);
+        VFS.createFile(cwd,name,content);
+        count++;
+      }
+      VFS.renderCurrent();refreshAll();
+      NotifCenter.push("File Manager",`Uploaded ${count} file${count===1?"":"s"}.`,"⬆️");
+    };
+    body.querySelector(".files-upload").addEventListener("click",()=>uploadInput.click());
+    uploadInput.addEventListener("change",()=>{uploadFiles(uploadInput.files);uploadInput.value=""});
+    ["dragenter","dragover"].forEach(ev=>grid.addEventListener(ev,e=>{if(e.dataTransfer&&[...e.dataTransfer.types].includes("Files")){e.preventDefault();grid.classList.add("drag-over")}}));
+    ["dragleave","drop"].forEach(ev=>grid.addEventListener(ev,e=>{if(ev==="drop")e.preventDefault();grid.classList.remove("drag-over")}));
+    grid.addEventListener("drop",e=>{
+      if(!e.dataTransfer||!e.dataTransfer.files||!e.dataTransfer.files.length)return;
+      e.preventDefault();uploadFiles(e.dataTransfer.files);
+    });
     grid.addEventListener("click",e=>{if(e.target===grid){selSet.clear();VFS.renderCurrent();updateClip()}});
     updateClip();VFS.renderCurrent();
   }
@@ -749,6 +1004,44 @@ const FolderPicker={
     overlay.querySelector(".fp-close").addEventListener("click",close);
     overlay.addEventListener("click",e=>{if(e.target===overlay)close()});
     overlay.querySelector(".fp-here").addEventListener("click",()=>{onPick(target);close()});
+  }
+};
+const FilePicker={
+  open(filterExt,onPick){
+    const old=$("#filePicker");if(old)old.remove();
+    const overlay=document.createElement("div");overlay.className="folder-picker-overlay";overlay.id="filePicker";
+    overlay.innerHTML=`<div class="folder-picker">
+      <div class="fp-head"><strong>Open file…</strong><button class="wbtn close fp-close" title="Cancel">✕</button></div>
+      <div class="toolbar" style="padding:0 2px"><button class="btn ghost tiny fp-up">⬆ Up</button><span class="fp-crumb" style="font-size:12px;color:var(--muted)">Home</span></div>
+      <div class="fp-tree fp-files"></div>
+      <div class="fp-actions"><span class="fp-hint" style="font-size:11px;color:var(--muted)">${filterExt?`Showing ${esc(filterExt)} files`:"Click a file to open"}</span><span></span></div>
+    </div>`;
+    document.body.appendChild(overlay);
+    let cwd=[];
+    const listEl=overlay.querySelector(".fp-files"),crumbEl=overlay.querySelector(".fp-crumb");
+    const matches=name=>!filterExt||name.toLowerCase().endsWith(filterExt);
+    const render=()=>{
+      crumbEl.textContent=cwd.length?cwd.join(" / "):"Home";
+      const node=VFS.resolve(cwd);
+      const items=node?Object.values(node.children):[];
+      listEl.innerHTML="";
+      items.sort((a,b)=>(a.type===b.type?a.name.localeCompare(b.name):a.type==="folder"?-1:1)).forEach(item=>{
+        if(item.type==="file"&&!matches(item.name))return;
+        const row=document.createElement("div");row.className="fp-row";
+        row.innerHTML=`<span>${fileIcon(item.name,item.type==="folder")}</span><span>${esc(item.name)}</span>`;
+        row.addEventListener("click",()=>{
+          if(item.type==="folder"){cwd=[...cwd,item.name];render();return}
+          onPick(cwd.slice(),item.name);close();
+        });
+        listEl.appendChild(row);
+      });
+      if(!listEl.children.length)listEl.innerHTML=`<div style="padding:10px;color:var(--muted);font-size:12px">No matching files</div>`;
+    };
+    overlay.querySelector(".fp-up").addEventListener("click",()=>{if(cwd.length){cwd=cwd.slice(0,-1);render()}});
+    render();
+    const close=()=>overlay.remove();
+    overlay.querySelector(".fp-close").addEventListener("click",close);
+    overlay.addEventListener("click",e=>{if(e.target===overlay)close()});
   }
 };
 function parseAppFile(item){
@@ -1012,7 +1305,9 @@ App.register("settings",{
         <div class="accent-row"></div>
       </div>
       <div class="set-section"><h4>Appearance</h4>
-        <div class="set-row"><span>Theme</span><select class="select s-theme"><option value="dark">Dark</option><option value="light">Light</option></select></div>
+        <div class="set-row"><span>Theme</span><select class="select s-theme"><option value="dark">Dark</option><option value="light">Light</option><option value="auto">Auto (system)</option></select></div>
+        <div class="set-row"><span>Sound effects</span><button class="toggle s-sounds"></button></div>
+        <div class="set-row"><span>Window animations</span><button class="toggle s-winanim"></button></div>
         <div class="set-row"><span>Window style</span><select class="select s-winstyle"><option value="glass">Glass</option><option value="solid">Solid</option></select></div>
         <div class="set-row"><span>Desktop icon size</span><select class="select s-iconsize"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select></div>
         <div class="set-row"><span>Show desktop icons</span><button class="toggle s-showicons"></button></div>
@@ -1033,10 +1328,13 @@ App.register("settings",{
         <div class="shortcut-grid">
           <div class="keys"><span class="kbd">Ctrl</span><span class="kbd">K</span></div><div>Open Start menu & search</div>
           <div class="keys"><span class="kbd">Ctrl</span><span class="kbd">S</span></div><div>Save note</div>
-          <div class="keys"><span class="kbd">Alt</span><span class="kbd">Tab</span></div><div>Switch windows</div>
+          <div class="keys"><span class="kbd">Alt</span><span class="kbd">Tab</span></div><div>Switch windows (hold Alt, tap Tab)</div>
           <div class="keys"><span class="kbd">Alt</span><span class="kbd">F4</span></div><div>Close active window</div>
+          <div class="keys"><span class="kbd">Ctrl</span><span class="kbd">Shift</span><span class="kbd">Esc</span></div><div>Open Task Manager</div>
+          <div class="keys"><span class="kbd">Ctrl</span><span class="kbd">←</span> / <span class="kbd">→</span></div><div>Snap window left / right</div>
+          <div class="keys"><span class="kbd">Ctrl</span><span class="kbd">↑</span> / <span class="kbd">↓</span></div><div>Maximize / restore window</div>
           <div class="keys"><span class="kbd">Esc</span></div><div>Close menus</div>
-          <div class="keys"><span class="kbd">↑</span> drag window to top</div><div>Maximize</div>
+          <div class="keys"><span class="kbd">↑</span> drag window to top</div><div>Maximize (drag to corners for quarter-tile)</div>
         </div>
       </div>
       <div class="set-section"><h4>Storage</h4>
@@ -1067,6 +1365,7 @@ App.register("settings",{
     body.querySelector(".s-density").addEventListener("change",e=>{Settings.set({density:e.target.value});Settings.apply()});
     const T=(sel,key)=>{const el=body.querySelector(sel);el.classList.toggle("on",Settings.get()[key]);el.addEventListener("click",()=>{const v=!Settings.get()[key];Settings.set({[key]:v});el.classList.toggle("on",v);Settings.apply()})};
     T(".s-showicons","showIcons");T(".s-widgets","widgets");T(".s-clock24","clock24");T(".s-seconds","seconds");
+    T(".s-sounds","sounds");T(".s-winanim","winAnim");
     T(".s-highcontrast","highContrast");T(".s-reducemotion","reduceMotion");T(".s-largetargets","largeTargets");
     const updStorage=()=>{body.querySelector(".s-storage-used").textContent=`${(Store.bytes()/1024).toFixed(1)} KB used`};
     updStorage();
@@ -1090,16 +1389,62 @@ App.register("sysinfo",{
       const files=VFS.count(),trash=Trash.count();
       const used=Store.bytes(),q=5*1024*1024,pct=Math.min(100,Math.round((used/q)*100));
       body.innerHTML=`
-        <div class="sys-card"><h4>Web OS</h4><table><tr><td>Version</td><td>4.1</td></tr><tr><td>Device name</td><td>${esc(Settings.get().deviceName)}</td></tr><tr><td>Platform</td><td>${esc(nav.platform||"Web")}</td></tr><tr><td>CPU threads</td><td>${nav.hardwareConcurrency||"?"}</td></tr><tr><td>Memory</td><td>${esc(mem)}</td></tr><tr><td>Screen</td><td>${screen.width}×${screen.height}</td></tr><tr><td>Window</td><td>${window.innerWidth}×${window.innerHeight}</td></tr><tr><td>Online</td><td>${nav.onLine?"Yes":"No"}</td></tr><tr><td>Connection</td><td>${esc(conn.effectiveType||"—")}</td></tr></table></div>
+        <div class="sys-card"><h4>Web OS</h4><table><tr><td>Version</td><td>4.2</td></tr><tr><td>Device name</td><td>${esc(Settings.get().deviceName)}</td></tr><tr><td>Platform</td><td>${esc(nav.platform||"Web")}</td></tr><tr><td>CPU threads</td><td>${nav.hardwareConcurrency||"?"}</td></tr><tr><td>Memory</td><td>${esc(mem)}</td></tr><tr><td>Screen</td><td>${screen.width}×${screen.height}</td></tr><tr><td>Window</td><td>${window.innerWidth}×${window.innerHeight}</td></tr><tr><td>Online</td><td>${nav.onLine?"Yes":"No"}</td></tr><tr><td>Connection</td><td>${esc(conn.effectiveType||"—")}</td></tr></table></div>
         <div class="sys-card"><h4>Apps & windows</h4><table><tr><td>Open windows</td><td>${Object.keys(WM.windows).length}</td></tr><tr><td>Registered apps</td><td>${App.all().length}</td></tr><tr><td>Installed</td><td>${Store.get("installed",INSTALLED_DEFAULT).length}</td></tr></table></div>
         <div class="sys-card"><h4>Data</h4><table><tr><td>Notes</td><td>${notes}</td></tr><tr><td>Files</td><td>${files}</td></tr><tr><td>Trash</td><td>${trash}</td></tr></table><div class="bar-progress"><div style="width:${pct}%"></div></div><div style="font-size:11px;color:var(--muted);margin-top:4px">${(used/1024).toFixed(1)} KB used (${pct}%)</div></div>`;
     };
     render();const iv=setInterval(()=>{if(!document.body.contains(body)){clearInterval(iv);return}render()},2000);
   }
 });
+App.register("taskmgr",{
+  id:"taskmgr",core:true,title:"Task Manager",icon:"📈",width:520,height:440,
+  html:`<div class="taskmgr-app">
+      <div class="toolbar"><strong style="flex:1">Processes</strong><span class="tm-summary" style="font-size:11px;color:var(--muted)"></span></div>
+      <div class="tm-list"></div>
+      <div class="toolbar"><button class="btn danger tiny tm-end" disabled>⛔ End task</button><span style="flex:1"></span><span class="tm-perf" style="font-size:11px;color:var(--muted)"></span></div>
+    </div>`,
+  init(body,win){
+    const listEl=body.querySelector(".tm-list"),endBtn=body.querySelector(".tm-end"),sumEl=body.querySelector(".tm-summary"),perfEl=body.querySelector(".tm-perf");
+    let sel=null;
+    const bg=[{id:"__shell",name:"Web OS Shell",icon:"⬢",base:3+Math.random()*3},{id:"__desktop",name:"Desktop & Compositor",icon:"🖥️",base:1+Math.random()*2}];
+    const stats={};
+    const getStat=(key,base)=>{
+      if(!stats[key])stats[key]={cpu:base,mem:20+Math.random()*40};
+      stats[key].cpu=Math.max(0.2,Math.min(38,stats[key].cpu+(Math.random()*6-3)));
+      stats[key].mem=Math.max(8,Math.min(220,stats[key].mem+(Math.random()*8-4)));
+      return stats[key];
+    };
+    const render=()=>{
+      const wins=Object.values(WM.windows);
+      const rows=[...bg.map(b=>({key:b.id,icon:b.icon,name:b.name,bg:true})),
+        ...wins.map(w=>{const def=App.get(w.app);return{key:w.id,icon:def?def.icon:"📦",name:def?def.title:w.app,bg:false,winId:w.id}})];
+      let totalCpu=0;
+      listEl.innerHTML=rows.map(r=>{
+        const st=getStat(r.key,r.bg?(bg.find(b=>b.id===r.key)||{}).base:2+Math.random()*4);
+        totalCpu+=st.cpu;
+        return`<div class="tm-row${sel===r.key?" on":""}" data-key="${esc(r.key)}"><span class="tm-ico">${r.icon}</span><span class="tm-name">${esc(r.name)}</span><span class="tm-cpu">${st.cpu.toFixed(1)}%</span><span class="tm-mem">${st.mem.toFixed(0)} MB</span></div>`;
+      }).join("");
+      sumEl.textContent=`${rows.length} processes`;
+      perfEl.textContent=`CPU ${Math.min(100,totalCpu).toFixed(0)}%`;
+      endBtn.disabled=!sel||bg.some(b=>b.id===sel);
+    };
+    listEl.addEventListener("click",e=>{
+      const row=e.target.closest(".tm-row");if(!row)return;
+      sel=row.dataset.key;render();
+    });
+    endBtn.addEventListener("click",()=>{
+      if(!sel)return;
+      const w=WM.windows[sel];
+      if(w){WM.close(sel);NotifCenter.push("Task Manager",`Ended task.`,"⛔")}
+      sel=null;render();
+    });
+    render();
+    const iv=setInterval(()=>{if(!document.body.contains(body)){clearInterval(iv);return}render()},1500);
+  }
+});
 App.register("about",{
   id:"about",core:true,title:"About",icon:"ℹ️",width:440,height:400,
-  html:`<div class="about-app"><div class="about-logo">⬢</div><div style="text-align:center"><span class="version-tag">Version 4.1</span></div><p><strong>Web OS</strong> is a browser-based desktop environment built with plain HTML, CSS, and JavaScript — no frameworks, no build step.</p><p>V4.1: real Camera app with front/back switching, zoom and video capture; File Manager multi-select and Move to; device name and accessibility settings (high contrast, reduce motion, larger tap targets); refined mobile taskbar and notifications; desktop icon layout closer to a real OS.</p><p>🥚 Try the Konami code: ↑ ↑ ↓ ↓ ← → ← → B A</p></div>`
+  html:`<div class="about-app"><div class="about-logo">⬢</div><div style="text-align:center"><span class="version-tag">Version 4.2</span></div><p><strong>Web OS</strong> is a browser-based desktop environment built with plain HTML, CSS, and JavaScript — no frameworks, no build step.</p><p>V4.2: Terminal, Code Editor, and PDF Viewer apps; real window snapping with quarter-tiling and a live preview; an Alt-Tab window switcher; a Task Manager; drag-and-drop uploads and zip compress/extract in File Manager; sound effects, window animations, and an Auto (system) theme.</p><p>Latest update: Code Editor now has a file tree sidebar (create files & folders right from it) and a ▶ Run button that previews HTML/JS live. Zip extraction is fixed — correct image types, no double-nested folders, no race condition on first use.</p><p>Standard APIs available to apps: Camera (photo/video), Clipboard, and persistent Storage — the same building blocks a real OS gives its apps, and the App Store is how new ones get installed.</p><p>🥚 Try the Konami code: ↑ ↑ ↓ ↓ ← → ← → B A</p></div>`
 });
 App.register("store",{
   id:"store",core:true,title:"App Store",icon:"🛍️",width:580,height:460,
@@ -1368,6 +1713,357 @@ App.register("camera",{
     App.get("camera").onClose=stopAll;
   }
 });
+App.register("terminal",{
+  id:"terminal",title:"Terminal",icon:"⌨️",width:620,height:440,desc:"Command-line shell into your Web OS files",
+  html:`<div class="terminal-app">
+      <div class="term-output"></div>
+      <div class="term-inputrow"><span class="term-prompt"></span><input class="term-input" autocomplete="off" spellcheck="false"></div>
+    </div>`,
+  init(body){
+    const out=body.querySelector(".term-output"),input=body.querySelector(".term-input"),promptEl=body.querySelector(".term-prompt");
+    let cwd=[];const hist=[];let histIdx=-1;
+    const pathLabel=()=>"~/"+cwd.join("/");
+    const print=(txt="",cls="")=>{const l=document.createElement("div");l.className="term-line "+cls;l.textContent=txt;out.appendChild(l);out.scrollTop=out.scrollHeight};
+    const printHtml=(html,cls="")=>{const l=document.createElement("div");l.className="term-line "+cls;l.innerHTML=html;out.appendChild(l);out.scrollTop=out.scrollHeight};
+    const resolve=arg=>{
+      if(!arg||arg===".")return cwd.slice();
+      if(arg==="~"||arg==="/")return[];
+      let parts=arg.startsWith("/")?arg.slice(1).split("/"):cwd.concat(arg.split("/"));
+      const stack=[];
+      parts.forEach(p=>{if(p===""||p===".")return;if(p==="..")stack.pop();else stack.push(p)});
+      return stack;
+    };
+    const splitPathName=arg=>{const full=resolve(arg);const name=full.pop();return{path:full,name}};
+    const updPrompt=()=>promptEl.textContent=`webos:${pathLabel()}$`;
+    const CMDS={
+      help(){print("Commands: help, ls [path], cd <path>, pwd, cat <file>, echo <text>, mkdir <name>, touch <name>, rm <name>, mv <a> <b>, cp <a> <b>, clear, whoami, date, apps, open <appid>, neofetch, history, exit")},
+      pwd(){print(pathLabel())},
+      ls(args){
+        const p=args[0]?resolve(args[0]):cwd;
+        const node=VFS.resolve(p);
+        if(!node||node.type!=="folder"){print(`ls: cannot access '${args[0]||"."}': No such directory`,"term-err");return}
+        const items=Object.values(node.children);
+        if(!items.length){print("(empty)");return}
+        print(items.map(it=>it.type==="folder"?it.name+"/":it.name).sort().join("   "));
+      },
+      cd(args){
+        if(!args[0]){cwd=[];updPrompt();return}
+        const p=resolve(args[0]);const node=VFS.resolve(p);
+        if(!node||node.type!=="folder"){print(`cd: ${args[0]}: No such directory`,"term-err");return}
+        cwd=p;updPrompt();
+      },
+      cat(args){
+        if(!args[0]){print("cat: missing file operand","term-err");return}
+        const{path,name}=splitPathName(args[0]);
+        const content=VFS.readFile(path,name);
+        if(content==null){print(`cat: ${args[0]}: No such file`,"term-err");return}
+        if(content.startsWith&&content.startsWith("data:")){print(`(binary file, ${fileSizeLabel(fileByteSize({type:"file",content}))})`);return}
+        print(content);
+      },
+      echo(args){
+        const line=args.join(" ");
+        const gtIdx=line.indexOf(">");
+        if(gtIdx>=0){
+          const text=line.slice(0,gtIdx).trim(),fname=line.slice(gtIdx+1).trim();
+          if(!fname){print("echo: missing filename after '>'","term-err");return}
+          const{path,name}=splitPathName(fname);
+          if(VFS.readFile(path,name)!=null)VFS.writeFile(path,name,text);
+          else VFS.createFile(path,name,text);
+          refreshAll();
+        }else print(line);
+      },
+      mkdir(args){if(!args[0]){print("mkdir: missing operand","term-err");return}const{path,name}=splitPathName(args[0]);if(VFS.createFolder(path,name)){refreshAll()}else print(`mkdir: cannot create '${args[0]}'`,"term-err")},
+      touch(args){if(!args[0]){print("touch: missing operand","term-err");return}const{path,name}=splitPathName(args[0]);if(VFS.readFile(path,name)==null){if(!VFS.createFile(path,name,""))print(`touch: cannot create '${args[0]}'`,"term-err")}refreshAll()},
+      rm(args){if(!args[0]){print("rm: missing operand","term-err");return}const{path,name}=splitPathName(args[0]);if(VFS.delete(path,name)){refreshAll()}else print(`rm: cannot remove '${args[0]}'`,"term-err")},
+      mv(args){if(args.length<2){print("mv: missing operand","term-err");return}const src=splitPathName(args[0]);const dest=splitPathName(args[1]);const f=VFS.resolve(src.path);if(f&&f.children[src.name]){VFS.rename(src.path,src.name,dest.name);if(JSON.stringify(src.path)!==JSON.stringify(dest.path))VFS.move(src.path,dest.name,dest.path);refreshAll()}else print(`mv: cannot stat '${args[0]}'`,"term-err")},
+      cp(args){if(args.length<2){print("cp: missing operand","term-err");return}const src=splitPathName(args[0]);const content=VFS.readFile(src.path,src.name);if(content==null){print(`cp: cannot stat '${args[0]}'`,"term-err");return}const dest=splitPathName(args[1]);VFS.createFile(dest.path,dest.name,content);refreshAll()},
+      clear(){out.innerHTML=""},
+      whoami(){print(Settings.get().deviceName.toLowerCase().replace(/\s+/g,"-"))},
+      date(){print(new Date().toString())},
+      apps(){print(App.visible().map(d=>d.id).join("  "))},
+      open(args){if(!args[0]||!App.get(args[0])){print(`open: unknown app '${args[0]||""}'`,"term-err");return}openApp(args[0]);print(`Opening ${args[0]}…`)},
+      neofetch(){
+        printHtml(`<pre style="margin:0;font-family:inherit">⬢ webos@${esc(Settings.get().deviceName)}
+------------------------
+OS: Web OS 4.2
+Windows open: ${Object.keys(WM.windows).length}
+Files: ${VFS.count()}
+Uptime: ${Math.floor(performance.now()/1000)}s</pre>`);
+      },
+      history(){print(hist.join("\n")||"(empty)")},
+      exit(){const w=WM.windows["win-terminal"];if(w)WM.close(w.id)}
+    };
+    const run=line=>{
+      const trimmed=line.trim();
+      print(`${promptEl.textContent} ${line}`,"term-echo");
+      if(!trimmed)return;
+      hist.push(trimmed);histIdx=hist.length;
+      const parts=trimmed.match(/(?:[^\s"]+|"[^"]*")+/g)||[];
+      const cmd=parts[0],args=parts.slice(1).map(a=>a.replace(/^"|"$/g,""));
+      if(CMDS[cmd])try{CMDS[cmd](args)}catch(err){print("error: "+err.message,"term-err")}
+      else print(`command not found: ${cmd} (type 'help')`,"term-err");
+    };
+    input.addEventListener("keydown",e=>{
+      if(e.key==="Enter"){const v=input.value;input.value="";run(v)}
+      else if(e.key==="ArrowUp"){if(histIdx>0){histIdx--;input.value=hist[histIdx]||"";setTimeout(()=>input.setSelectionRange(input.value.length,input.value.length))}e.preventDefault()}
+      else if(e.key==="ArrowDown"){if(histIdx<hist.length){histIdx++;input.value=hist[histIdx]||""}e.preventDefault()}
+    });
+    body.addEventListener("click",()=>input.focus());
+    printHtml(`<pre style="margin:0;font-family:inherit">Web OS Terminal — type 'help' for commands.</pre>`);
+    updPrompt();
+    setTimeout(()=>input.focus(),50);
+  }
+});
+App.register("editor",{
+  id:"editor",title:"Code Editor",icon:"🧑‍💻",width:760,height:560,desc:"Spck-style code editor: file tree, create files & folders, run HTML/JS directly",
+  html:`<div class="editor-app">
+      <div class="toolbar editor-tabs"></div>
+      <div class="editor-body">
+        <div class="editor-sidebar">
+          <div class="toolbar tiny-toolbar">
+            <strong class="ed-tree-label">FILES</strong>
+            <button class="wbtn ed-new-file" title="New file">📄<sup>+</sup></button>
+            <button class="wbtn ed-new-folder" title="New folder">📂<sup>+</sup></button>
+          </div>
+          <div class="editor-tree"></div>
+        </div>
+        <div class="editor-main">
+          <div class="editor-wrap">
+            <div class="editor-gutter"></div>
+            <pre class="editor-highlight"><code></code></pre>
+            <textarea class="editor-area" spellcheck="false" autocomplete="off"></textarea>
+          </div>
+          <div class="toolbar">
+            <button class="btn ghost tiny ed-toggle-tree">📁 Files</button>
+            <button class="btn ghost tiny ed-save">💾 Save</button>
+            <span style="flex:1"></span>
+            <span class="ed-status" style="font-size:11px;color:var(--muted)"></span>
+            <button class="btn tiny ed-run">▶ Run</button>
+          </div>
+        </div>
+      </div>
+    </div>`,
+  init(body,win){
+    const tabsEl=body.querySelector(".editor-tabs"),gutter=body.querySelector(".editor-gutter"),hl=body.querySelector(".editor-highlight code"),area=body.querySelector(".editor-area"),statusEl=body.querySelector(".ed-status"),treeEl=body.querySelector(".editor-tree"),sidebar=body.querySelector(".editor-sidebar");
+    let tabs=[];let activeIdx=-1;let treeCwd=[];const expanded=new Set([""]);
+    const langOf=name=>{const ext=(name.split(".").pop()||"").toLowerCase();if(["js","json"].includes(ext))return"js";if(ext==="html")return"html";if(ext==="css")return"css";return"plain"};
+    const HL_RULES={
+      js:[[/\/\/.*$/gm,"cm"],[/(["'`])(?:(?!\1)[^\\]|\\.)*\1/g,"str"],[/\b(function|return|const|let|var|if|else|for|while|new|class|import|export|from|true|false|null|undefined|typeof|await|async|try|catch)\b/g,"kw"],[/\b\d+(\.\d+)?\b/g,"num"]],
+      html:[[/(&lt;!--[\s\S]*?--&gt;)/g,"cm"],[/(&lt;\/?)([a-zA-Z0-9-]+)/g,(m,p1,p2)=>p1+`<span class="tk-kw">${p2}</span>`],[/([a-zA-Z-]+)(=)(".*?")/g,(m,a,eq,v)=>`<span class="tk-attr">${a}</span>${eq}<span class="tk-str">${v}</span>`]],
+      css:[[/\/\*[\s\S]*?\*\//g,"cm"],[/([.#]?[a-zA-Z0-9_-]+)(\s*\{)/g,(m,a,b)=>`<span class="tk-kw">${a}</span>${b}`],[/(:\s*)([^;{}]+)(;)/g,(m,a,v,c)=>`${a}<span class="tk-str">${v}</span>${c}`]],
+      plain:[]
+    };
+    const highlight=(text,lang)=>{
+      let e=esc(text);
+      const rules=HL_RULES[lang]||[];
+      rules.forEach(([re,repl])=>{
+        if(typeof repl==="string")e=e.replace(re,m=>`<span class="tk-${repl}">${m}</span>`);
+        else e=e.replace(re,repl);
+      });
+      return e;
+    };
+    const renderGutter=()=>{const n=(area.value.match(/\n/g)||[]).length+1;let s="";for(let i=1;i<=n;i++)s+=i+"\n";gutter.textContent=s};
+    const renderHl=()=>{const t=tabs[activeIdx];hl.innerHTML=highlight(area.value,t?langOf(t.name):"plain")+"\n"};
+    const renderTabs=()=>{
+      tabsEl.innerHTML=tabs.map((t,i)=>`<button class="ed-tab${i===activeIdx?" on":""}" data-i="${i}">${esc(t.name)}${t.dirty?" •":""}<span class="ed-tab-close" data-i="${i}">✕</span></button>`).join("")||`<span style="color:var(--muted);font-size:12px">No file open — pick one from Files, or 📄+</span>`;
+    };
+    const syncScroll=()=>{gutter.scrollTop=area.scrollTop;hl.parentElement.scrollTop=area.scrollTop;hl.parentElement.scrollLeft=area.scrollLeft};
+    const loadTab=i=>{
+      activeIdx=i;const t=tabs[i];if(!t)return;
+      area.value=t.content;renderGutter();renderHl();renderTabs();renderTree();
+      statusEl.textContent=(t.path.length?t.path.join("/")+"/":"")+t.name;
+      area.focus();
+    };
+    const openFile=(path,name)=>{
+      const existing=tabs.findIndex(t=>t.name===name&&JSON.stringify(t.path)===JSON.stringify(path));
+      if(existing>=0){loadTab(existing);return}
+      const content=VFS.readFile(path,name);
+      if(content==null||(content.startsWith&&content.startsWith("data:"))){NotifCenter.push("Code Editor","Can't open a binary file here.","🧑‍💻");return}
+      tabs.push({path,name,content,dirty:false});loadTab(tabs.length-1);
+    };
+    const closeTab=i=>{
+      tabs.splice(i,1);
+      if(activeIdx===i)activeIdx=-1;else if(activeIdx>i)activeIdx--;
+      if(activeIdx<0&&tabs.length)activeIdx=Math.max(0,i-1);
+      if(tabs[activeIdx])loadTab(activeIdx);else{area.value="";renderGutter();renderHl();renderTabs();renderTree();statusEl.textContent=""}
+    };
+    const newFile=(path)=>{const p=path||treeCwd;const name=uniqueChildName(VFS.resolve(p)||VFS.resolve([]),"untitled.txt");VFS.createFile(p,name,"");refreshAll();tabs.push({path:p,name,content:"",dirty:false});loadTab(tabs.length-1);sidebar.classList.remove("show")};
+    const newFolder=(path)=>{const p=path||treeCwd;const name=uniqueChildName(VFS.resolve(p)||VFS.resolve([]),"New folder");VFS.createFolder(p,name);expanded.add([...p,name].join("/"));refreshAll();renderTree();};
+    const save=()=>{
+      const t=tabs[activeIdx];if(!t)return;
+      t.content=area.value;
+      if(VFS.readFile(t.path,t.name)!=null)VFS.writeFile(t.path,t.name,t.content);
+      else VFS.createFile(t.path,t.name,t.content);
+      t.dirty=false;renderTabs();refreshAll();
+      NotifCenter.push("Code Editor",`Saved "${t.name}".`,"💾");
+    };
+    const renderTree=()=>{
+      treeEl.innerHTML="";
+      const walk=(path,node,depth)=>{
+        const items=Object.values(node.children||{}).sort((a,b)=>a.type===b.type?a.name.localeCompare(b.name):a.type==="folder"?-1:1);
+        items.forEach(item=>{
+          const itemPath=[...path,item.name],key=itemPath.join("/");
+          const isOpenTab=item.type==="file"&&tabs[activeIdx]&&tabs[activeIdx].name===item.name&&JSON.stringify(tabs[activeIdx].path)===JSON.stringify(path);
+          const row=document.createElement("div");
+          row.className="ed-tree-row"+(item.type==="folder"&&treeCwd.join("/")===key?" cwd":"")+(isOpenTab?" open":"");
+          row.style.paddingLeft=(depth*14+8)+"px";
+          row.innerHTML=`<span>${item.type==="folder"?(expanded.has(key)?"📂":"📁"):fileIcon(item.name,false)}</span><span class="ed-tree-name">${esc(item.name)}</span>`;
+          row.addEventListener("click",()=>{
+            if(item.type==="folder"){treeCwd=itemPath;if(expanded.has(key))expanded.delete(key);else expanded.add(key);renderTree()}
+            else{openFile(path,item.name);sidebar.classList.remove("show")}
+          });
+          treeEl.appendChild(row);
+          if(item.type==="folder"&&expanded.has(key))walk(itemPath,item,depth+1);
+        });
+      };
+      const root=VFS.resolve([]);if(root)walk([],root,0);
+      if(!treeEl.children.length)treeEl.innerHTML=`<div style="padding:8px;color:var(--muted);font-size:12px">Empty</div>`;
+    };
+    body.querySelector(".ed-new-file").addEventListener("click",()=>newFile());
+    body.querySelector(".ed-new-folder").addEventListener("click",()=>newFolder());
+    body.querySelector(".ed-save").addEventListener("click",save);
+    body.querySelector(".ed-toggle-tree").addEventListener("click",()=>sidebar.classList.toggle("show"));
+    tabsEl.addEventListener("click",e=>{
+      const x=e.target.closest(".ed-tab-close");if(x){e.stopPropagation();closeTab(Number(x.dataset.i));return}
+      const b=e.target.closest(".ed-tab");if(!b)return;loadTab(Number(b.dataset.i));
+    });
+    area.addEventListener("input",()=>{
+      renderGutter();renderHl();
+      const t=tabs[activeIdx];if(t){t.dirty=true;renderTabs()}
+    });
+    area.addEventListener("scroll",syncScroll);
+    area.addEventListener("keydown",e=>{
+      if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="s"){e.preventDefault();save()}
+      if(e.key==="Tab"){e.preventDefault();const s=area.selectionStart,en=area.selectionEnd;area.value=area.value.slice(0,s)+"  "+area.value.slice(en);area.selectionStart=area.selectionEnd=s+2;area.dispatchEvent(new Event("input"))}
+    });
+    const inlineHtml=(html,path)=>{
+      return html
+        .replace(/<link[^>]+rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/gi,(m,href)=>{
+          if(/^https?:|^\/\//i.test(href))return m;
+          const css=VFS.readFile(path,href.replace(/^\.\//,""));
+          return css!=null?`<style>\n${css}\n</style>`:`<!-- couldn't find ${esc(href)} -->`;
+        })
+        .replace(/<script([^>]*)\ssrc=["']([^"']+)["']([^>]*)><\/script>/gi,(m,pre,src)=>{
+          if(/^https?:|^\/\//i.test(src))return m;
+          const js=VFS.readFile(path,src.replace(/^\.\//,""));
+          return js!=null?`<script>\n${js}\n</script>`:`<!-- couldn't find ${esc(src)} -->`;
+        });
+    };
+    body.querySelector(".ed-run").addEventListener("click",()=>{
+      const t=tabs[activeIdx];if(!t){NotifCenter.push("Code Editor","Open a file first.","▶");return}
+      t.content=area.value;
+      const lang=langOf(t.name);
+      if(lang==="html")RunPreview.open(t.name,inlineHtml(t.content,t.path),"html");
+      else if(lang==="js")RunPreview.open(t.name,t.content,"js");
+      else NotifCenter.push("Code Editor","Nothing to run for this file type — try an .html or .js file.","▶");
+    });
+    if(win.args&&win.args.path!==undefined&&win.args.name)openFile(win.args.path,win.args.name);
+    else{renderTabs()}
+    win.openFile=openFile;
+    renderTree();
+  }
+});
+const RunPreview={
+  open(title,content,kind){
+    const old=$("#runPreview");if(old)old.remove();
+    const overlay=document.createElement("div");overlay.className="folder-picker-overlay";overlay.id="runPreview";
+    overlay.innerHTML=`<div class="folder-picker run-preview">
+      <div class="fp-head"><strong>▶ ${esc(title)}</strong><button class="wbtn close rp-close" title="Close">✕</button></div>
+      <div class="rp-body">${kind==="html"?'<iframe class="rp-frame" sandbox="allow-scripts allow-forms allow-modals allow-popups"></iframe>':'<div class="rp-console"></div>'}</div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const close=()=>{window.removeEventListener("message",listener);overlay.remove()};
+    let listener=()=>{};
+    overlay.querySelector(".rp-close").addEventListener("click",close);
+    overlay.addEventListener("click",e=>{if(e.target===overlay)close()});
+    if(kind==="html"){
+      overlay.querySelector(".rp-frame").srcdoc=content;
+      return;
+    }
+    const consoleEl=overlay.querySelector(".rp-console");
+    consoleEl.innerHTML='<div class="rp-log rp-placeholder" style="color:var(--muted)">Running…</div>';
+    const wrapped=`<script>
+      const send=(type,args)=>parent.postMessage({__runlog:true,type,args:args.map(a=>{try{return typeof a==="object"?JSON.stringify(a):String(a)}catch{return String(a)}})},"*");
+      ["log","warn","error","info"].forEach(m=>{const orig=console[m];console[m]=(...a)=>{send(m,a);orig&&orig.apply(console,a)}});
+      window.onerror=(msg)=>{send("error",[String(msg)]);return true};
+      try{
+        ${content}
+      }catch(e){send("error",[e.message])}
+    </script>`;
+    const hiddenFrame=document.createElement("iframe");hiddenFrame.style.display="none";hiddenFrame.sandbox="allow-scripts";
+    overlay.appendChild(hiddenFrame);
+    listener=e=>{
+      if(!e.data||!e.data.__runlog)return;
+      const ph=consoleEl.querySelector(".rp-placeholder");if(ph)ph.remove();
+      const row=document.createElement("div");row.className="rp-log rp-log-"+e.data.type;
+      row.textContent=e.data.args.join(" ");
+      consoleEl.appendChild(row);consoleEl.scrollTop=consoleEl.scrollHeight;
+    };
+    window.addEventListener("message",listener);
+    hiddenFrame.addEventListener("load",()=>{setTimeout(()=>{const ph=consoleEl.querySelector(".rp-placeholder");if(ph)ph.textContent="✓ Ran with no console output."},250)},{once:true});
+    hiddenFrame.srcdoc=wrapped;
+  }
+};
+App.register("pdfviewer",{
+  id:"pdfviewer",title:"PDF Viewer",icon:"📕",width:520,height:620,desc:"View PDF documents with page navigation and zoom",
+  html:`<div class="pdfviewer-app">
+      <div class="toolbar">
+        <button class="btn ghost tiny pv-open">📂 Open…</button>
+        <span style="flex:1"></span>
+        <button class="btn ghost tiny pv-zoomout">－</button>
+        <span class="pv-zoom" style="font-size:12px;color:var(--muted)">100%</span>
+        <button class="btn ghost tiny pv-zoomin">＋</button>
+      </div>
+      <div class="pv-canvas-wrap"><canvas class="pv-canvas"></canvas><div class="pv-empty">No PDF open — click Open… to choose one, or drag & drop a PDF from your computer onto File Manager.</div></div>
+      <div class="toolbar">
+        <button class="btn ghost tiny pv-prev">◀ Prev</button>
+        <span class="pv-pageinfo" style="font-size:12px;color:var(--muted)">—</span>
+        <button class="btn ghost tiny pv-next">Next ▶</button>
+      </div>
+    </div>`,
+  init(body,win){
+    const canvas=body.querySelector(".pv-canvas"),wrap=body.querySelector(".pv-canvas-wrap"),empty=body.querySelector(".pv-empty"),pageInfo=body.querySelector(".pv-pageinfo"),zoomLbl=body.querySelector(".pv-zoom");
+    let pdfDoc=null,pageNum=1,zoom=1.0;
+    const ensurePdfJs=()=>new Promise((resolve,reject)=>{
+      if(window.pdfjsLib)return resolve(window.pdfjsLib);
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+      s.onload=()=>{window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";resolve(window.pdfjsLib)};
+      s.onerror=()=>reject(new Error("Could not load PDF engine (are you offline?)"));
+      document.head.appendChild(s);
+    });
+    const renderPage=async()=>{
+      if(!pdfDoc)return;
+      const page=await pdfDoc.getPage(pageNum);
+      const viewport=page.getViewport({scale:zoom});
+      canvas.width=viewport.width;canvas.height=viewport.height;
+      await page.render({canvasContext:canvas.getContext("2d"),viewport}).promise;
+      pageInfo.textContent=`Page ${pageNum} of ${pdfDoc.numPages}`;
+      zoomLbl.textContent=Math.round(zoom*100)+"%";
+    };
+    const openPdf=async(path,name)=>{
+      const content=VFS.readFile(path,name);
+      if(!content||!content.startsWith("data:")){NotifCenter.push("PDF Viewer","That file isn't a PDF.","📕");return}
+      try{
+        empty.textContent="Loading PDF engine…";
+        const lib=await ensurePdfJs();
+        const base64=content.split(",")[1];
+        const bin=atob(base64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+        pdfDoc=await lib.getDocument({data:bytes}).promise;
+        pageNum=1;empty.style.display="none";canvas.style.display="block";
+        await renderPage();
+      }catch(err){empty.style.display="flex";canvas.style.display="none";empty.textContent="Couldn't open PDF: "+err.message}
+    };
+    body.querySelector(".pv-open").addEventListener("click",()=>FilePicker.open(".pdf",(path,name)=>openPdf(path,name)));
+    body.querySelector(".pv-prev").addEventListener("click",()=>{if(pdfDoc&&pageNum>1){pageNum--;renderPage()}});
+    body.querySelector(".pv-next").addEventListener("click",()=>{if(pdfDoc&&pageNum<pdfDoc.numPages){pageNum++;renderPage()}});
+    body.querySelector(".pv-zoomin").addEventListener("click",()=>{zoom=Math.min(3,zoom+0.2);if(pdfDoc)renderPage();else zoomLbl.textContent=Math.round(zoom*100)+"%"});
+    body.querySelector(".pv-zoomout").addEventListener("click",()=>{zoom=Math.max(0.4,zoom-0.2);if(pdfDoc)renderPage();else zoomLbl.textContent=Math.round(zoom*100)+"%"});
+    canvas.style.display="none";
+    if(win.args&&win.args.path!==undefined&&win.args.name)openPdf(win.args.path,win.args.name);
+    win.openPdf=openPdf;
+  }
+});
 const Widgets={
   iv:null,
   init(){
@@ -1574,9 +2270,49 @@ const Boot={
     const finish=()=>screen.classList.add("hide");
     screen.addEventListener("click",finish,{once:true});
     setTimeout(finish,1700);
+    setTimeout(()=>SFX.startup(),300);
   },
   shutdown(){
     Store.set("powered",false);location.reload();
+  }
+};
+const AltTab={
+  el:null,idx:0,order:[],
+  build(){
+    this.order=Object.values(WM.windows).sort((a,b)=>(parseFloat(b.el.style.zIndex)||0)-(parseFloat(a.el.style.zIndex)||0));
+    return this.order.length>0;
+  },
+  show(){
+    if(this.el)return;
+    if(!this.build())return;
+    this.idx=this.order.length>1?1:0;
+    this.el=document.createElement("div");this.el.className="alttab-overlay";
+    this.el.innerHTML=`<div class="alttab-panel"></div>`;
+    document.body.appendChild(this.el);
+    this.render();
+  },
+  render(){
+    if(!this.el)return;
+    const panel=this.el.querySelector(".alttab-panel");
+    panel.innerHTML=this.order.map((w,i)=>{
+      const def=App.get(w.app);
+      return`<div class="alttab-item${i===this.idx?" on":""}"><span class="alttab-icon">${def?def.icon:"📦"}</span><span class="alttab-title">${esc(def?def.title:w.app)}</span></div>`;
+    }).join("");
+  },
+  step(dir){
+    if(!this.el)return;
+    this.idx=(this.idx+dir+this.order.length)%this.order.length;
+    this.render();
+  },
+  commit(){
+    if(!this.el)return;
+    const pick=this.order[this.idx];
+    if(pick){if(pick.minimized)WM.restore(pick.id);else WM.focus(pick.id)}
+    this.hide();
+  },
+  hide(){
+    if(!this.el)return;
+    this.el.remove();this.el=null;this.order=[];
   }
 };
 const Shortcuts={
@@ -1585,28 +2321,38 @@ const Shortcuts={
   init(){
     document.addEventListener("keydown",e=>{
       if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"){e.preventDefault();StartMenu.toggle();return}
-      if(e.altKey&&e.key==="Tab"){e.preventDefault();cycleWindows();return}
+      if(e.altKey&&e.key==="Tab"){
+        e.preventDefault();
+        if(!AltTab.el)AltTab.show();else AltTab.step(e.shiftKey?-1:1);
+        return;
+      }
       if(e.altKey&&e.key==="F4"){e.preventDefault();if(WM.focused())WM.close(WM.focused());return}
+      if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key==="Escape"){e.preventDefault();openApp("taskmgr");return}
+      if((e.ctrlKey||e.metaKey)&&!e.shiftKey&&["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key)&&WM.focused()){
+        e.preventDefault();
+        const map={ArrowLeft:"left",ArrowRight:"right",ArrowUp:"max",ArrowDown:"restore"};
+        const region=map[e.key];
+        if(region==="restore"){const w=WM.windows[WM.focused()];if(w){w.el.classList.remove("maximized");if(w.preMax){w.el.style.left=w.preMax.l;w.el.style.top=w.preMax.t;w.el.style.width=w.preMax.w;w.el.style.height=w.preMax.h}saveWinState()}}
+        else WM.snap(WM.focused(),region);
+        return;
+      }
       if(e.key==="Escape"){$("#startMenu").classList.remove("show");$("#contextMenu").classList.remove("show");$("#notifPanel").classList.remove("show");$("#calPanel").classList.remove("show")}
       this.konami(e.key);
+    });
+    document.addEventListener("keyup",e=>{
+      if(e.key==="Alt"&&AltTab.el)AltTab.commit();
     });
   },
   konami(k){
     if(k===this.konamiSeq[this.konamiBuf.length]){this.konamiBuf.push(k);if(this.konamiBuf.length===this.konamiSeq.length){this.konamiBuf=[];const ks=Object.keys(ACCENTS);const pick=ks[Math.floor(Math.random()*ks.length)];Settings.set({accent:pick});NotifCenter.push("🥚 Easter egg",`Konami code accepted! Accent: ${pick}.`,"🎮",true)}}else{this.konamiBuf=k===this.konamiSeq[0]?[k]:[]}
   }
 };
-function cycleWindows(){
-  const arr=Object.values(WM.windows).filter(w=>!w.minimized);
-  if(arr.length<2)return;
-  arr.sort((a,b)=>(parseFloat(a.el.style.zIndex)||0)-(parseFloat(b.el.style.zIndex)||0));
-  WM.focus(arr[0].id);
-}
 document.addEventListener("DOMContentLoaded",()=>{
   VFS.load();VFS.ensureInstalledAppsFolder();
   WM.init();Taskbar.init();StartMenu.init();Panels.init();Shortcuts.init();
   Context.init();Widgets.init();Settings.apply();Clock.start();Boot.init();
   renderDesktopIcons();renderStartApps();
-  setTimeout(()=>NotifCenter.push("Welcome to Web OS 4.1","New: Camera app with front/back switching, zoom & video capture. File Manager gets multi-select and Move to…. Plus device name and accessibility settings.","🚀",true),2400);
+  setTimeout(()=>NotifCenter.push("Welcome to Web OS 4.2","New: Terminal, Code Editor & PDF Viewer (App Store). Real window snapping + Alt-Tab switcher. Task Manager (Ctrl+Shift+Esc). Drag & drop uploads and zip support in File Manager.","🚀",true),2400);
 });
 window.addEventListener("online",()=>Widgets.tick());
 window.addEventListener("offline",()=>Widgets.tick());
