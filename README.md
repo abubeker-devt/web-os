@@ -1,6 +1,6 @@
 # 🖥️ Web OS 4.1
 
-A browser-based desktop environment built with HTML, CSS, and JavaScript.
+A responsive browser-based desktop environment for desktop and mobile, built with HTML, CSS, and JavaScript.
 
 ## ✨ V4.1
 
