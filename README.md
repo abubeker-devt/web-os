@@ -1,10 +1,17 @@
-# 🖥️ Web OS 4.1
+ # 🖥️ Web OS 4.1
 
 A responsive browser-based desktop environment for desktop and mobile, built with HTML, CSS, and JavaScript.
 
+## 👨‍💻 Developer
+
+**Abubeker Muhidin Seid**
+
+Earth Sciences student at Addis Ababa University and Web Development student at Rise Up Tech Solutions.
+
 ## ✨ V4.1
 
-### File Manager
+### 📁 File Manager
+
 - 📁 Create folders
 - 📄 Create files
 - 🔎 Search files
@@ -39,5 +46,13 @@ A responsive browser-based desktop environment for desktop and mobile, built wit
 
 Open `index.html` in a browser.
 
-No framework.
+No framework.  
 No build step.
+
+## 📌 Project Status
+
+Web OS is an ongoing personal project. New versions and features are being developed progressively.
+
+---
+
+**Developed by Abubeker Muhidin Seid**
