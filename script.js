@@ -52,7 +52,10 @@ function uniqueChildName(folderNode,name){
 const isTouch=("ontouchstart"in window)||navigator.maxTouchPoints>0;
 const APP_REGISTRY={};
 let desktopIcons=[];
-const INSTALLED_DEFAULT=["weather","game","music","paint"];
+// Terminal and Code Editor are part of the system — they ship "installed" so the
+// App Store doesn't have to gate them. Default app set the user sees on a fresh
+// boot is also widened so the home grid isn't empty.
+const INSTALLED_DEFAULT=["weather","game","music","paint","terminal","editor"];
 const App={
   register(id,def){
     APP_REGISTRY[id]=Object.assign({id,name:id,title:id,icon:"📦",core:false,width:480,height:380,html:"",init:null,onClose:null},def);
@@ -70,6 +73,7 @@ const WM={
   open(id,args={}){
     const def=App.get(id);if(!def)return null;
     const winId="win-"+id;if(this.windows[winId]){const w=this.windows[winId];if(w.minimized)this.restore(winId);else this.focus(winId);return w}
+    DevLog.add("window.open",def.title);
     const el=document.createElement("div");el.className="window "+def.id+"-win";el.id=winId;
     el.innerHTML=`<div class="window-top"><div class="window-title"><span class="win-icon">${def.icon}</span>${esc(def.title)}</div><div class="window-actions"><button class="wbtn min" title="Minimize">—</button><button class="wbtn max" title="Maximize">▢</button><button class="wbtn close" title="Close">✕</button></div></div><div class="window-body"></div>`;
     this.layer.appendChild(el);
@@ -91,7 +95,7 @@ const WM={
     body.innerHTML=def.html||"";
     const winObj={id:winId,app:id,el,minimized:false,maximized:false,preMax:null,args};
     this.windows[winId]=winObj;
-    if(def.init){try{def.init(body,winObj,args)}catch(e){console.error(e);body.innerHTML=`<div style="color:var(--red)">App error: ${esc(e.message)}</div>`}}
+    if(def.init){try{def.init(body,winObj,args)}catch(e){console.error(e);DevLog.add("app.error",`${def.title}: ${e.message}`);body.innerHTML=`<div style="color:var(--red)">App error: ${esc(e.message)}</div>`}}
     if(Settings.get().winAnim){el.classList.add("opening");requestAnimationFrame(()=>requestAnimationFrame(()=>el.classList.remove("opening")))}
     el.classList.add("show");
     this.focus(winId);
@@ -130,6 +134,7 @@ const WM={
   close(winId){
     const w=this.windows[winId];if(!w)return;
     const def=App.get(w.app);
+    DevLog.add("window.close",def?def.title:w.app);
     if(def&&def.onClose)try{def.onClose(w)}catch{}
     SFX.close();
     const finish=()=>{
@@ -307,6 +312,35 @@ const NotifCenter={
   },
   clearAll(){this.save([]);this.renderPanel()}
 };
+const ClipboardHistory={
+  KEY:"clipboard.history",
+  list(){return Store.get(this.KEY,[])},
+  add(text){
+    if(!text||!text.trim())return;
+    const l=this.list().filter(t=>t!==text);
+    l.unshift(text);
+    Store.set(this.KEY,l.slice(0,25));
+  },
+  remove(text){Store.set(this.KEY,this.list().filter(t=>t!==text))},
+  clear(){Store.set(this.KEY,[])}
+};
+const DevLog={
+  KEY:"devlog.events",
+  list(){return Store.get(this.KEY,[])},
+  add(type,detail){
+    if(!Settings.get().devMode)return;
+    const l=this.list();l.unshift({type,detail,at:Date.now()});
+    Store.set(this.KEY,l.slice(0,80));
+  },
+  clear(){Store.set(this.KEY,[])}
+};
+window.addEventListener("error",e=>{
+  DevLog.add("uncaught.error",e.message);
+  if(typeof NotifCenter!=="undefined"&&typeof Settings!=="undefined"&&Settings.get().devMode)NotifCenter.push("Web OS","An unexpected error occurred: "+e.message,"⚠️");
+});
+window.addEventListener("unhandledrejection",e=>{
+  DevLog.add("unhandled.rejection",String(e.reason&&e.reason.message||e.reason||"unknown"));
+});
 const TOAST_MAX_STACK=3;
 function toast(title,msg,icon="🔔",sticky=false){
   const box=$("#notifications"),el=document.createElement("div");el.className="toast";
@@ -337,7 +371,7 @@ function actionToast(title,msg,icon,actionLabel,callback,timeout=6000){
   el.querySelector(".toast-action").addEventListener("click",()=>{clearTimeout(t);finish();callback&&callback()});
 }
 const Settings={
-  defaults:{wallpaper:"aurora",theme:"dark",accent:"purple",winStyle:"glass",iconSize:"medium",showIcons:true,widgets:true,density:"comfortable",fontSize:15,snapEnabled:true,sounds:true,winAnim:true,deviceName:"WebOS Device",highContrast:false,reduceMotion:false,largeTargets:false,realtimeProtection:true,firewallOn:true,permCamera:true,permClipboard:true,permLocation:true,lockOnBoot:true,autoLockEnabled:true,autoLockMinutes:5,systemNotifs:false},
+  defaults:{wallpaper:"aurora",theme:"dark",accent:"purple",winStyle:"glass",iconSize:"medium",showIcons:true,widgets:true,density:"comfortable",fontSize:15,snapEnabled:true,sounds:true,winAnim:true,deviceName:"WebOS Device",highContrast:false,reduceMotion:false,largeTargets:false,realtimeProtection:true,firewallOn:true,permCamera:true,permClipboard:true,permLocation:true,lockOnBoot:true,autoLockEnabled:true,autoLockMinutes:5,systemNotifs:false,devMode:false},
   get(){return Object.assign({},this.defaults,Store.get("settings",{}))},
   set(p){Store.set("settings",Object.assign(this.get(),p));this.apply()},
   apply(){
@@ -548,6 +582,7 @@ const Installer={
     if(this.isInstalled(id))return false;
     Store.set("installed",[...this.installed(),id]);
     const def=App.get(id);NotifCenter.push("App Store",`"${def.title}" installed. Open it from Start, Desktop, or Installed Apps folder.`,def.icon);
+    DevLog.add("app.install",def.title);
     VFS.ensureInstalledAppsFolder();
     refreshAll();
     return true;
@@ -557,6 +592,7 @@ const Installer={
     const def=App.get(id);
     const winId="win-"+id;
     if(WM.windows[winId])WM.close(winId);
+    DevLog.add("app.uninstall",def.title);
     if(!skipUndo){
       actionToast("App Store",`"${def.title}" uninstalled.`,def.icon,"Undo",()=>{this.install(id)},6500);
     }
@@ -592,7 +628,7 @@ const Taskbar={
 };
 function renderStartApps(){
   const box=$("#startApps");if(!box)return;box.innerHTML="";
-  App.visible().filter(def=>!def.desktopOnly).forEach(def=>{
+  App.visible().filter(def=>!def.desktopOnly).filter(def=>!def.devOnly||Settings.get().devMode).forEach(def=>{
     const tile=document.createElement("button");
     tile.className="app-tile";
     tile.dataset.app=def.id;
@@ -602,56 +638,438 @@ function renderStartApps(){
   });
 }
 const ICON_COLORS={
-  thispc:"#5b7fd6",notes:"#ffc857",files:"#4db8ff",trash:"#8a93a6",calculator:"#3ecf8e",
+  thispc:"#5b7fd6",notes:"#ffc857",files:"#4db8ff",trash:"#8a93a6",clipboard:"#5cc9c9",calculator:"#3ecf8e",
   browser:"#4d7dff",settings:"#8a93a6",paint:"#ff4da6",weather:"#4db8ff",
   music:"#7a5cff",game:"#ff9f43",store:"#3ecf8e",sysinfo:"#7a5cff",about:"#ff5c5c",
   camera:"#3a3d46",taskmgr:"#ff6b6b",editor:"#2f6fed",terminal:"#1c1c22",pdfviewer:"#e5484d",
-  security:"#2ecc71",phonelink:"#4d7dff",photos:"#ff9f43"
+  security:"#2ecc71",phonelink:"#4d7dff",photos:"#ff9f43",devtools:"#ff9f43"
 };
-function renderDesktopIcons(){
-  const box=$("#desktopIcons");if(!box)return;
-  box.innerHTML="";
-  if(!Settings.get().showIcons)return;
-  desktopIcons=[];
+/* ============ Desktop paging & folders ============ */
+const DESKTOP_LAYOUT_KEY="desktopLayoutV2";
+function dlGet(){
+  let l=Store.get(DESKTOP_LAYOUT_KEY,null);
+  if(!l||!Array.isArray(l.order))l={order:[],folders:{}};
+  if(!l.folders)l.folders={};
+  return l;
+}
+function dlSave(l){Store.set(DESKTOP_LAYOUT_KEY,l)}
+function dlAvailableApps(){
   const installed=Store.get("installed",INSTALLED_DEFAULT);
-  const order=["thispc","notes","files","trash","calculator","browser","camera","photos","security","phonelink","taskmgr","settings","paint","weather","music","game","store","sysinfo","about"];
+  // Desktop order — matches the reference mobile layout: the Terminal-style
+  // icon sits at global index 12, which lands at row 4, column 1 on a 4×4
+  // mobile page (capacity 16).
+  const order=["thispc","notes","files","browser","calculator","weather","music","camera","photos","paint","settings","clipboard","terminal","editor","trash","sysinfo","taskmgr","security","phonelink","store","about"];
+  if(Settings.get().devMode)order.push("devtools");
+  const ids=[];
   order.concat(installed).forEach(id=>{
-    if(desktopIcons.includes(id))return;
+    if(ids.includes(id))return;
     const def=App.get(id);if(!def||(!def.core&&!installed.includes(id)))return;
-    desktopIcons.push(id);
+    if(def.devOnly&&!Settings.get().devMode)return;
+    ids.push(id);
+  });
+  return ids;
+}
+function dlNewFolderId(){return "f"+Math.random().toString(36).slice(2,9)}
+function dlReconcile(){
+  const layout=dlGet();
+  const available=new Set(dlAvailableApps());
+  const placed=new Set();
+  Object.keys(layout.folders).forEach(fid=>{
+    const f=layout.folders[fid];
+    f.apps=(f.apps||[]).filter(a=>available.has(a));
+  });
+  const newOrder=[];
+  layout.order.forEach(cell=>{
+    if(cell==null)return;
+    if(typeof cell==="string"){
+      if(available.has(cell)&&!placed.has(cell)){placed.add(cell);newOrder.push(cell)}
+      return;
+    }
+    if(cell.f){
+      const f=layout.folders[cell.f];
+      if(!f||!f.apps.length){delete layout.folders[cell.f];return}
+      if(f.apps.length===1){
+        const only=f.apps[0];delete layout.folders[cell.f];
+        if(!placed.has(only)){placed.add(only);newOrder.push(only)}
+        return;
+      }
+      f.apps.forEach(a=>placed.add(a));
+      newOrder.push(cell);
+    }
+  });
+  dlAvailableApps().forEach(id=>{if(!placed.has(id)){placed.add(id);newOrder.push(id)}});
+  layout.order=newOrder;
+  dlSave(layout);
+  return layout;
+}
+const DG={
+  els:{},layout:null,pages:[],page:0,cols:4,rows:5,capacity:20,drag:null,
+  init(){
+    this.els.pager=$("#desktopPager");
+    this.els.pages=$("#desktopPages");
+    this.els.dots=$("#pageDots");
+    if(!this.els.pager)return;
+    this.wirePagerSwipe();
+    window.addEventListener("resize",debounce(()=>this.render(),200));
+  },
+  computeCapacity(){
+    const pager=this.els.pager;
+    const mobile=window.matchMedia("(max-width:768px)").matches;
+    const w=(pager&&pager.clientWidth)||360,h=(pager&&pager.clientHeight)||600;
+    const iconPx=parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--icon-size"))||58;
+    if(mobile){
+      // Force a clean 4-column grid; rows are computed from actual height so
+      // phones with different aspect ratios still fill the screen, capped at
+      // 4 to keep it tidy (4×4 default → 16 icons per page).
+      const cols=4;
+      const tileH=iconPx+62;
+      const rows=Math.min(4,Math.max(3,Math.floor((h-32)/tileH)));
+      return{cols,rows,capacity:cols*rows};
+    }
+    const tileW=iconPx+40;
+    const cols=Math.max(3,Math.floor((w-48)/(tileW+10)));
+    const tileH=iconPx+56;
+    const rows=Math.max(2,Math.floor((h-48)/(tileH+10)));
+    return{cols,rows,capacity:Math.max(6,cols*rows)};
+  },
+  render(){
+    if(!this.els.pager)return;
+    if(!Settings.get().showIcons){this.els.pages.innerHTML="";this.els.dots.innerHTML="";this.els.dots.classList.add("hidden");return}
+    const{cols,rows,capacity}=this.computeCapacity();
+    this.cols=cols;this.rows=rows;this.capacity=capacity;
+    this.layout=dlReconcile();
+    const pages=[];
+    for(let i=0;i<this.layout.order.length;i+=capacity)pages.push(this.layout.order.slice(i,i+capacity));
+    if(!pages.length)pages.push([]);
+    this.pages=pages;
+    if(this.page>pages.length-1)this.page=pages.length-1;
+    if(this.page<0)this.page=0;
+    this.els.pages.innerHTML="";
+    pages.forEach((pageItems,pi)=>{
+      const pageEl=document.createElement("div");
+      pageEl.className="desktop-page";
+      pageEl.dataset.page=pi;
+      const grid=document.createElement("div");
+      grid.className="desktop-icons";
+      grid.style.gridTemplateColumns=`repeat(${cols},1fr)`;
+      grid.dataset.page=pi;
+      pageItems.forEach((cell,li)=>grid.appendChild(this.buildTile(cell,pi,li)));
+      pageEl.appendChild(grid);
+      this.els.pages.appendChild(pageEl);
+    });
+    this.renderDots();
+    this.goToPage(this.page,false);
+  },
+  buildTile(cell,pageIndex,localIndex){
     const tile=document.createElement("div");
     tile.className="desktop-icon";
-    tile.dataset.app=id;
-    tile.draggable=true;
-    const badge=id==="trash"&&Trash.count()>0?`<span class="icon-badge">${Trash.count()}</span>`:"";
-    const tint=ICON_COLORS[id];
-    const tintStyle=tint?` style="background:linear-gradient(135deg,${hexToRgba(tint,0.9)},${hexToRgba(tint,0.55)})"`:"";
-    tile.innerHTML=`<div class="icon-box"${tintStyle}><span class="app-glyph">${def.icon}</span>${badge}</div><span class="lbl">${esc(def.title)}</span>`;
-    tile.addEventListener("click",e=>{e.stopPropagation();box.querySelectorAll(".desktop-icon").forEach(x=>x.classList.remove("selected"));tile.classList.add("selected")});
-    tile.addEventListener("dblclick",()=>WM.open(id));
-    if(isTouch)tile.addEventListener("click",()=>WM.open(id));
-    tile.addEventListener("dragstart",e=>{e.dataTransfer.setData("text/app-id",id);tile.classList.add("dragging")});
-    tile.addEventListener("dragend",()=>tile.classList.remove("dragging"));
-    box.appendChild(tile);
-  });
-  box.querySelectorAll(".desktop-icon").forEach(t=>{
-    t.addEventListener("click",e=>{if(e.target.closest(".desktop-icon")===t){
-      box.querySelectorAll(".desktop-icon").forEach(x=>x.classList.remove("selected"));t.classList.add("selected");
-    }});
-  });
-  $$(".desktop-icon").forEach(t=>t.addEventListener("click",e=>e.stopPropagation()));
-  applyDesktopGridOrder(box);
-}
-function applyDesktopGridOrder(box){
-  const saved=Store.get("desktopOrder",{});
-  [...box.children].sort((a,b)=>{
-    const ai=saved[a.dataset.app],bi=saved[b.dataset.app];
-    if(ai!=null&&bi!=null)return ai-bi;
-    if(ai!=null)return -1;
-    if(bi!=null)return 1;
-    return 0;
-  }).forEach(el=>box.appendChild(el));
-}
+    tile.dataset.page=pageIndex;
+    tile.dataset.index=localIndex;
+    if(typeof cell==="string"){
+      const id=cell,def=App.get(id);
+      tile.dataset.app=id;
+      if(!def)return tile;
+      const badge=id==="trash"&&Trash.count()>0?`<span class="icon-badge">${Trash.count()}</span>`:"";
+      const tint=ICON_COLORS[id];
+      const tintStyle=tint?` style="background:linear-gradient(135deg,${hexToRgba(tint,0.9)},${hexToRgba(tint,0.55)})"`:"";
+      tile.innerHTML=`<div class="icon-box"${tintStyle}><span class="app-glyph">${def.icon}</span>${badge}</div><span class="lbl">${esc(def.title)}</span>`;
+      this.wireTileEvents(tile,{type:"app",id});
+    }else if(cell&&cell.f){
+      const f=this.layout.folders[cell.f];
+      tile.dataset.folder=cell.f;
+      tile.classList.add("folder-icon");
+      const minis=(f&&f.apps||[]).slice(0,4).map(aid=>{const d=App.get(aid);return `<span class="mini-glyph">${d?d.icon:"📦"}</span>`}).join("");
+      tile.innerHTML=`<div class="icon-box">${minis}</div><span class="lbl">${esc(f&&f.name||"Folder")}</span>`;
+      this.wireTileEvents(tile,{type:"folder",id:cell.f});
+    }
+    return tile;
+  },
+  wireTileEvents(tile,ref){
+    tile.addEventListener("pointerdown",e=>{
+      if(e.pointerType==="mouse"&&e.button!==0)return;
+      const startX=e.clientX,startY=e.clientY,pid=e.pointerId;
+      let moved=false;
+      try{tile.setPointerCapture(pid)}catch{}
+      const onMove=ev=>{
+        if(ev.pointerId!==pid)return;
+        const dx=ev.clientX-startX,dy=ev.clientY-startY;
+        if(!moved&&Math.hypot(dx,dy)>9){moved=true;this.beginDrag(tile,ref,ev.clientX,ev.clientY)}
+        if(moved)this.onDragMove(ev.clientX,ev.clientY);
+      };
+      const onUp=ev=>{
+        if(ev.pointerId!==pid)return;
+        tile.removeEventListener("pointermove",onMove);
+        tile.removeEventListener("pointerup",onUp);
+        tile.removeEventListener("pointercancel",onUp);
+        if(moved){this.endDrag(ev.clientX,ev.clientY)}
+        else{
+          if(ref.type==="folder"){
+            if(isTouch)this.openFolder(ref.id);
+            else{$$(".desktop-icon").forEach(x=>x.classList.remove("selected"));tile.classList.add("selected")}
+          }else{
+            if(isTouch)WM.open(ref.id);
+            else{$$(".desktop-icon").forEach(x=>x.classList.remove("selected"));tile.classList.add("selected")}
+          }
+        }
+      };
+      tile.addEventListener("pointermove",onMove);
+      tile.addEventListener("pointerup",onUp);
+      tile.addEventListener("pointercancel",onUp);
+    });
+    tile.addEventListener("dblclick",()=>{if(ref.type==="folder")this.openFolder(ref.id);else WM.open(ref.id)});
+    tile.addEventListener("click",e=>e.stopPropagation());
+  },
+  beginDrag(tile,ref,x,y){
+    const rect=tile.getBoundingClientRect();
+    const ghost=document.createElement("div");
+    ghost.className="desktop-icon icon-ghost";
+    ghost.style.width=rect.width+"px";
+    ghost.innerHTML=tile.innerHTML;
+    document.body.appendChild(ghost);
+    ghost.style.left=(x-rect.width/2)+"px";
+    ghost.style.top=(y-rect.height/2)+"px";
+    tile.classList.add("placeholder");
+    this.drag={tile,ref,ghost,fromPage:Number(tile.dataset.page),fromIndex:Number(tile.dataset.index),overTile:null,edgeTimer:null,edgeDir:0};
+  },
+  onDragMove(x,y){
+    const d=this.drag;if(!d)return;
+    const r=d.ghost.getBoundingClientRect();
+    d.ghost.style.left=(x-r.width/2)+"px";
+    d.ghost.style.top=(y-r.height/2)+"px";
+    const prevDisplay=d.ghost.style.display;
+    d.ghost.style.display="none";
+    const under=document.elementFromPoint(x,y);
+    d.ghost.style.display=prevDisplay;
+    const overTileEl=under&&under.closest?under.closest(".desktop-icon"):null;
+    $$(".desktop-icon.drop-target,.desktop-icon.folder-hover").forEach(t=>t.classList.remove("drop-target","folder-hover"));
+    d.overTile=null;
+    if(overTileEl&&overTileEl!==d.tile&&!overTileEl.classList.contains("icon-ghost")){
+      d.overTile=overTileEl;
+      if(overTileEl.dataset.folder)overTileEl.classList.add("folder-hover");
+      else if(overTileEl.dataset.app)overTileEl.classList.add("drop-target");
+    }
+    const pr=this.els.pager.getBoundingClientRect();
+    const EDGE=36;
+    let dir=0;
+    if(x-pr.left<EDGE)dir=-1;else if(pr.right-x<EDGE)dir=1;
+    if(dir!==d.edgeDir){
+      d.edgeDir=dir;
+      clearTimeout(d.edgeTimer);
+      if(dir!==0){
+        d.edgeTimer=setTimeout(()=>{
+          const target=this.page+dir;
+          if(target>=0&&target<this.pages.length)this.goToPage(target,true);
+        },550);
+      }
+    }
+  },
+  endDrag(x,y){
+    const d=this.drag;if(!d)return;
+    clearTimeout(d.edgeTimer);
+    $$(".desktop-icon.drop-target,.desktop-icon.folder-hover").forEach(t=>t.classList.remove("drop-target","folder-hover"));
+    d.ghost.remove();
+    d.tile.classList.remove("placeholder");
+    const layout=this.layout;
+    const srcCell=(this.pages[d.fromPage]||[])[d.fromIndex];
+    this.drag=null;
+    if(srcCell===undefined){this.render();return}
+    const globalFrom=d.fromPage*this.capacity+d.fromIndex;
+    const isFolderDrag=typeof srcCell!=="string";
+    if(d.overTile){
+      const overFolderId=d.overTile.dataset.folder;
+      const overAppId=d.overTile.dataset.app;
+      if(!isFolderDrag&&overFolderId){
+        layout.order.splice(globalFrom,1);
+        const f=layout.folders[overFolderId];
+        if(f&&!f.apps.includes(srcCell))f.apps.push(srcCell);
+        dlSave(layout);this.render();return;
+      }
+      if(!isFolderDrag&&overAppId&&overAppId!==srcCell){
+        const tGlobal=Number(d.overTile.dataset.page)*this.capacity+Number(d.overTile.dataset.index);
+        layout.order.splice(globalFrom,1);
+        const adjTGlobal=globalFrom<tGlobal?tGlobal-1:tGlobal;
+        const fid=dlNewFolderId();
+        layout.folders[fid]={name:"Folder",apps:[overAppId,srcCell]};
+        layout.order[adjTGlobal]={f:fid};
+        dlSave(layout);this.render();return;
+      }
+      // fallback: reposition to the hovered tile's slot
+      const tPage=Number(d.overTile.dataset.page),tIndex=Number(d.overTile.dataset.index);
+      let globalTo=tPage*this.capacity+tIndex;
+      layout.order.splice(globalFrom,1);
+      if(globalFrom<globalTo)globalTo--;
+      if(globalTo>layout.order.length)globalTo=layout.order.length;
+      layout.order.splice(globalTo,0,srcCell);
+      dlSave(layout);this.render();return;
+    }
+    // reorder within/between pages based on pointer position
+    const pageEl=this.els.pages.children[this.page];
+    const grid=pageEl?pageEl.querySelector(".desktop-icons"):null;
+    let insertLocal=this.pages[this.page]?this.pages[this.page].length:0;
+    if(grid){
+      const tiles=[...grid.querySelectorAll(".desktop-icon")];
+      for(let i=0;i<tiles.length;i++){
+        const r=tiles[i].getBoundingClientRect();
+        if(y<r.top+r.height/2||(y<r.bottom&&x<r.left+r.width/2)){insertLocal=i;break}
+      }
+    }
+    let globalTo=this.page*this.capacity+insertLocal;
+    layout.order.splice(globalFrom,1);
+    if(globalFrom<globalTo)globalTo--;
+    if(globalTo>layout.order.length)globalTo=layout.order.length;
+    if(globalTo<0)globalTo=0;
+    layout.order.splice(globalTo,0,srcCell);
+    dlSave(layout);
+    this.render();
+  },
+  renderDots(){
+    const dots=this.els.dots;if(!dots)return;
+    dots.innerHTML="";
+    if(this.pages.length<=1){dots.classList.add("hidden");return}
+    dots.classList.remove("hidden");
+    this.pages.forEach((_,i)=>{
+      const dot=document.createElement("span");
+      dot.className="page-dot"+(i===this.page?" active":"");
+      dot.dataset.page=i;
+      dot.title="Page "+(i+1);
+      dot.addEventListener("click",()=>this.goToPage(i,true));
+      dots.appendChild(dot);
+    });
+  },
+  goToPage(i,animate){
+    if(i<0)i=0;if(i>this.pages.length-1)i=this.pages.length-1;
+    this.page=i;
+    this.els.pages.classList.toggle("dragging-page",!animate);
+    this.els.pages.style.transform=`translateX(${-i*100}%)`;
+    $$(".page-dot",this.els.dots).forEach((dot,idx)=>dot.classList.toggle("active",idx===i));
+    // Reflect the current page in the URL hash so a reload preserves it and
+    // swipes / dot clicks share the same handler.
+    try{if(animate&&history.replaceState)history.replaceState(null,"","#"+i)}catch{}
+  },
+  wirePagerSwipe(){
+    // Smooth, momentum-aware swipe navigation for both mouse and touch.
+    // - "touch-action: pan-y" lives in CSS so vertical page scroll still works
+    //   while the finger drags horizontally.
+    // - Velocity is tracked so a fast flick moves one page even on a short drag.
+    // - The desktop-pages container shows "dragging-page" while the finger is
+    //   down (CSS disables transitions during the drag) and snaps with a soft
+    //   spring animation when released.
+    const pager=this.els.pager;
+    // History buffer of recent {t,x} samples so velocity is averaged over a
+    // short window instead of just the last two touch events — raw
+    // point-to-point deltas from a finger are jittery and made quick, light
+    // flicks feel unresponsive.
+    let active=false,pid=null,startX=0,startY=0,curX=0,rafId=null,pendingPct=null;
+    let hist=[];
+    const pushSample=x=>{
+      const now=performance.now();
+      hist.push({t:now,x});
+      // Keep ~80ms of history.
+      while(hist.length>2&&now-hist[0].t>80)hist.shift();
+    };
+    const velocity=()=>{
+      if(hist.length<2)return 0;
+      const a=hist[0],b=hist[hist.length-1];
+      const dt=Math.max(1,b.t-a.t);
+      return (b.x-a.x)/dt; // px/ms
+    };
+    const flushTransform=()=>{
+      rafId=null;
+      if(pendingPct!=null)this.els.pages.style.transform=`translateX(${pendingPct}%)`;
+    };
+    pager.addEventListener("pointerdown",e=>{
+      if(e.target.closest(".desktop-icon")||this.drag)return;
+      active=true;pid=e.pointerId;startX=e.clientX;startY=e.clientY;curX=e.clientX;
+      hist=[];pushSample(e.clientX);
+      try{pager.setPointerCapture(pid)}catch{}
+      this.els.pages.classList.add("dragging-page");
+    });
+    pager.addEventListener("pointermove",e=>{
+      if(!active||e.pointerId!==pid)return;
+      const dx=e.clientX-startX,dy=e.clientY-startY;
+      // Let vertical gestures bubble up so the browser can scroll the page;
+      // only take over once the user is clearly going horizontal.
+      if(Math.abs(dy)>Math.abs(dx)*1.4)return;
+      curX=e.clientX;
+      pushSample(e.clientX);
+      // Rubber-band at the edges so an over-drag doesn't fling the pager into
+      // empty space.
+      const basePct=-this.page*100;
+      let dragPct=(dx/Math.max(1,pager.clientWidth))*100;
+      const atStart=this.page===0&&dx>0;
+      const atEnd=this.page===this.pages.length-1&&dx<0;
+      if(atStart||atEnd)dragPct*=0.35;
+      // Batch the style write into a single rAF per frame so fast-fingered
+      // drags on mobile stay glued to the touch point instead of stuttering.
+      pendingPct=basePct+dragPct;
+      if(rafId==null)rafId=requestAnimationFrame(flushTransform);
+    });
+    const finish=e=>{
+      if(!active||(pid!==null&&e.pointerId!==pid))return;
+      active=false;
+      if(rafId!=null){cancelAnimationFrame(rafId);rafId=null}
+      this.els.pages.classList.remove("dragging-page");
+      const dx=curX-startX;
+      const vx=velocity();
+      const width=Math.max(1,pager.clientWidth);
+      // Lower thresholds than before: a light flick or a short-but-decisive
+      // drag now moves a page instead of needing a near-full-width swipe.
+      const TH=width*0.1;
+      const FAST=0.28,VERY_FAST=0.9;
+      let target=this.page;
+      if(Math.abs(vx)>=VERY_FAST){
+        // A hard flick can carry across more than one page, proportional to
+        // both speed and how far the finger already travelled.
+        const extra=Math.min(2,Math.round(Math.abs(dx)/width+Math.abs(vx)));
+        target=vx>0?this.page-Math.max(1,extra):this.page+Math.max(1,extra);
+      }else if(vx>=FAST&&this.page>0)target=this.page-1;
+      else if(vx<=-FAST&&this.page<this.pages.length-1)target=this.page+1;
+      else if(dx>TH&&this.page>0)target=this.page-1;
+      else if(dx<-TH&&this.page<this.pages.length-1)target=this.page+1;
+      this.goToPage(target,true);
+    };
+    pager.addEventListener("pointerup",finish);
+    pager.addEventListener("pointercancel",finish);
+  },
+  openFolder(fid){
+    const f=this.layout.folders[fid];if(!f)return;
+    this.closeFolder();
+    const overlay=document.createElement("div");
+    overlay.className="folder-overlay";
+    overlay.id="folderOverlay";
+    overlay.innerHTML=`<div class="folder-panel"><input class="folder-name" maxlength="24" value="${esc(f.name||"Folder")}"><div class="folder-apps-grid"></div></div>`;
+    document.body.appendChild(overlay);
+    const grid=overlay.querySelector(".folder-apps-grid");
+    const renderGrid=()=>{
+      grid.innerHTML="";
+      (f.apps||[]).forEach(aid=>{
+        const def=App.get(aid);if(!def)return;
+        const t=document.createElement("div");
+        t.className="desktop-icon folder-member";
+        const tint=ICON_COLORS[aid];
+        const tintStyle=tint?` style="background:linear-gradient(135deg,${hexToRgba(tint,0.9)},${hexToRgba(tint,0.55)})"`:"";
+        t.innerHTML=`<div class="icon-box"${tintStyle}><span class="app-glyph">${def.icon}</span></div><span class="lbl">${esc(def.title)}</span><button class="folder-member-remove" title="Remove from folder">✕</button>`;
+        t.querySelector(".folder-member-remove").addEventListener("click",e=>{
+          e.stopPropagation();
+          f.apps=f.apps.filter(x=>x!==aid);
+          dlSave(this.layout);
+          if(f.apps.length<2){this.closeFolder();return}
+          renderGrid();
+        });
+        t.addEventListener("click",e=>{e.stopPropagation();this.closeFolder();WM.open(aid)});
+        grid.appendChild(t);
+      });
+    };
+    renderGrid();
+    const nameInput=overlay.querySelector(".folder-name");
+    nameInput.addEventListener("keydown",e=>{if(e.key==="Enter")nameInput.blur()});
+    nameInput.addEventListener("blur",()=>{f.name=nameInput.value.trim()||"Folder";dlSave(this.layout)});
+    overlay.addEventListener("click",e=>{if(e.target===overlay)this.closeFolder()});
+    overlay.querySelector(".folder-panel").addEventListener("click",e=>e.stopPropagation());
+  },
+  closeFolder(){const o=$("#folderOverlay");if(o){o.remove();this.render()}}
+};
+function renderDesktopIcons(){DG.render()}
 function openApp(id,args){WM.open(id,args);StartMenu.close()}
 App.register("notes",{
   id:"notes",core:true,title:"Notes",icon:"📝",width:560,height:440,
@@ -740,7 +1158,7 @@ const filesAppDef={
         </div>
       </div>
     </div>`,
-  init(body){
+  init(body,win){
     let cwd=[];let selSet=new Set();let lastClicked=null;let clip=null;let multiMode=false;
     const grid=body.querySelector(".folder-grid"),crumbsEl=body.querySelector(".crumb-bar"),searchEl=body.querySelector(".files-search"),sortSel=body.querySelector(".files-sort"),statsEl=body.querySelector(".files-stats"),clipEl=body.querySelector(".files-clip"),selectModeBtn=body.querySelector(".files-select-mode");
     const sorted=items=>{const mode=sortSel.value;return[...items].sort((a,b)=>{if(a.type!==b.type)return a.type==="folder"?-1:1;if(mode==="date")return(b.modified||0)-(a.modified||0);if(mode==="size")return((b.type==="file"?(b.content||"").length:Object.keys(b.children||{}).length)-((a.type==="file"?(a.content||"").length:Object.keys(a.children||{}).length)));if(mode==="type"){const ea=(a.name.split(".").pop()||""),eb=(b.name.split(".").pop()||"");return ea===eb?a.name.localeCompare(b.name):ea.localeCompare(eb)}return a.name.localeCompare(b.name)})};
@@ -1000,6 +1418,8 @@ const filesAppDef={
       e.preventDefault();uploadFiles(e.dataTransfer.files);
     });
     grid.addEventListener("click",e=>{if(e.target===grid){selSet.clear();VFS.renderCurrent();updateClip()}});
+    win.navigateTo=(path,name)=>{cwd=(path||[]).slice();searchEl.value="";selSet.clear();if(name)selSet.add(name);VFS.renderCurrent()};
+    if(win.args&&win.args.path)win.navigateTo(win.args.path,win.args.name);
     updateClip();VFS.renderCurrent();
   }
 };
@@ -1091,14 +1511,57 @@ App.register("trash",{
     };
     const doRestore=i=>{if(Trash.restore(i)){render();NotifCenter.push("Recycle Bin","Item restored.","♻️")}else NotifCenter.push("Recycle Bin","Original folder missing or name taken.","♻️")};
     body.querySelector(".trash-restore").addEventListener("click",()=>{if(sel==null){NotifCenter.push("Recycle Bin","Select an item.","🗑️");return}doRestore(sel)});
-    body.querySelector(".trash-purge").addEventListener("click",()=>{if(sel==null){NotifCenter.push("Recycle Bin","Select an item.","🗑️");return}Trash.purge(sel);render();NotifCenter.push("Recycle Bin","Item permanently deleted.","🔥")});
-    body.querySelector(".trash-empty").addEventListener("click",()=>{Trash.empty();render();NotifCenter.push("Recycle Bin","Recycle Bin emptied.","🔥")});
+    body.querySelector(".trash-purge").addEventListener("click",()=>{
+      if(sel==null){NotifCenter.push("Recycle Bin","Select an item.","🗑️");return}
+      actionToast("Recycle Bin","Permanently delete this item? This can't be undone.","🔥","Delete",()=>{Trash.purge(sel);render();NotifCenter.push("Recycle Bin","Item permanently deleted.","🔥")},7000);
+    });
+    body.querySelector(".trash-empty").addEventListener("click",()=>{
+      if(!Trash.count()){NotifCenter.push("Recycle Bin","Already empty.","🗑️");return}
+      actionToast("Recycle Bin","Permanently delete all items in the Recycle Bin? This can't be undone.","🔥","Empty",()=>{Trash.empty();render();NotifCenter.push("Recycle Bin","Recycle Bin emptied.","🔥")},7000);
+    });
+    render();
+  }
+});
+App.register("clipboard",{
+  id:"clipboard",core:true,title:"Clipboard Manager",icon:"📋",width:420,height:500,
+  html:`<div class="clipboard-app">
+      <div class="toolbar"><strong style="flex:1">Clipboard history</strong><button class="btn ghost tiny cb-capture" title="Read the current system clipboard into history">⬇ Capture</button><button class="btn ghost tiny cb-clear">🗑️ Clear</button></div>
+      <div class="cb-list"></div>
+      <div style="font-size:11px;color:var(--muted)">Web OS can only see text copied inside apps that use the Copy button — browsers don't allow sites to watch the system clipboard in the background.</div>
+    </div>`,
+  init(body){
+    const listEl=body.querySelector(".cb-list");
+    const render=()=>{
+      const items=ClipboardHistory.list();
+      if(!items.length){listEl.innerHTML=`<div class="empty-state">No clipboard history yet.</div>`;return}
+      listEl.innerHTML=items.map((t,i)=>`<div class="cb-row" data-i="${i}"><div class="cb-text">${esc(t.length>140?t.slice(0,140)+"…":t)}</div><div class="cb-actions"><button class="btn ghost tiny cb-copy" data-i="${i}">📋 Copy</button><button class="btn ghost tiny cb-del" data-i="${i}">✕</button></div></div>`).join("");
+    };
+    listEl.addEventListener("click",async e=>{
+      const items=ClipboardHistory.list();
+      const copyBtn=e.target.closest(".cb-copy");
+      if(copyBtn){
+        const t=items[Number(copyBtn.dataset.i)];
+        try{await navigator.clipboard.writeText(t);NotifCenter.push("Clipboard Manager","Copied to clipboard.","📋")}
+        catch{NotifCenter.push("Clipboard Manager","Couldn't reach the system clipboard here.","⚠️")}
+        return;
+      }
+      const delBtn=e.target.closest(".cb-del");
+      if(delBtn){ClipboardHistory.remove(items[Number(delBtn.dataset.i)]);render();return}
+    });
+    body.querySelector(".cb-capture").addEventListener("click",async()=>{
+      if(!Settings.get().permClipboard){NotifCenter.push("Clipboard Manager","Clipboard access is blocked by Security Center.","🛡️");return}
+      try{const t=await navigator.clipboard.readText();if(!t.trim()){NotifCenter.push("Clipboard Manager","Clipboard is empty.","📋");return}ClipboardHistory.add(t);render();NotifCenter.push("Clipboard Manager","Captured from clipboard.","📋")}
+      catch{NotifCenter.push("Clipboard Manager","The browser blocked reading the clipboard.","⚠️")}
+    });
+    body.querySelector(".cb-clear").addEventListener("click",()=>{
+      if(!ClipboardHistory.list().length){NotifCenter.push("Clipboard Manager","Already empty.","📋");return}
+      actionToast("Clipboard Manager","Clear all clipboard history?","🗑️","Clear",()=>{ClipboardHistory.clear();render();NotifCenter.push("Clipboard Manager","History cleared.","🗑️")},6000);
+    });
     render();
   }
 });
 function updateBadge(){
-  const desktop=$("#desktopIcons");if(!desktop)return;
-  const tile=desktop.querySelector(`[data-app="trash"]`);
+  const tile=$(`.desktop-icon[data-app="trash"]`);
   if(tile){const old=tile.querySelector(".icon-badge");if(old)old.remove();if(Trash.count()>0){const b=document.createElement("span");b.className="icon-badge";b.textContent=Trash.count();tile.querySelector(".icon-box").appendChild(b)}}
 }
 App.register("calculator",{
@@ -1262,7 +1725,7 @@ App.register("calculator",{
     body.querySelector(".calc-toggle-hist").addEventListener("click",e=>{histPanel.classList.toggle("show");body.querySelector(".calc-clear-hist").hidden=!histPanel.classList.contains("show");renderHist();e.currentTarget.classList.toggle("ghost",histPanel.classList.contains("show"))});
     body.querySelector(".calc-clear-hist").addEventListener("click",()=>{hist=[];saveHist();renderHist()});
     histPanel.addEventListener("click",e=>{const r=e.target.closest(".calc-hist-row");if(!r||r.dataset.i==null)return;current=hist[Number(r.dataset.i)].result;fresh=true;acc=null;pendingOp=null;show()});
-    body.querySelector(".calc-copy").addEventListener("click",()=>{const t=valEl.textContent;if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(()=>NotifCenter.push("Calculator",`Copied "${t}".`,"📋")).catch(()=>NotifCenter.push("Calculator","Result: "+t,"🧮"));else NotifCenter.push("Calculator","Result: "+t,"🧮")});
+    body.querySelector(".calc-copy").addEventListener("click",()=>{const t=valEl.textContent;if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(()=>{ClipboardHistory.add(t);NotifCenter.push("Calculator",`Copied "${t}".`,"📋")}).catch(()=>NotifCenter.push("Calculator","Result: "+t,"🧮"));else NotifCenter.push("Calculator","Result: "+t,"🧮")});
     body.tabIndex=-1;
     const keyMap={"*":"×","/":"÷","-":"−"};
     body.addEventListener("keydown",e=>{
@@ -1368,6 +1831,10 @@ App.register("settings",{
       <div class="set-section"><h4>Storage</h4>
         <div class="set-row"><span><span class="s-storage-used">— used</span></span><button class="btn ghost tiny s-reset">Reset everything</button></div>
       </div>
+      <div class="set-section"><h4>Advanced</h4>
+        <div class="set-row"><span>Developer mode</span><button class="toggle s-devmode"></button></div>
+        <div style="font-size:11px;color:var(--muted)">Adds a Dev Tools app (event log & internal state inspector) to Start and the desktop.</div>
+      </div>
     </div>`,
   init(body){
     const s=Settings.get();
@@ -1395,6 +1862,13 @@ App.register("settings",{
     T(".s-showicons","showIcons");T(".s-widgets","widgets");T(".s-clock24","clock24");T(".s-seconds","seconds");
     T(".s-sounds","sounds");T(".s-winanim","winAnim");
     T(".s-highcontrast","highContrast");T(".s-reducemotion","reduceMotion");T(".s-largetargets","largeTargets");
+    const devToggle=body.querySelector(".s-devmode");
+    devToggle.classList.toggle("on",Settings.get().devMode);
+    devToggle.addEventListener("click",()=>{
+      const v=!Settings.get().devMode;Settings.set({devMode:v});devToggle.classList.toggle("on",v);
+      refreshAll();
+      NotifCenter.push("Settings",`Developer mode ${v?"enabled":"disabled"}.`,"🧩");
+    });
     const notifToggle=body.querySelector(".s-sysnotifs");
     const syncNotifToggle=()=>notifToggle.classList.toggle("on",Settings.get().systemNotifs);
     syncNotifToggle();
@@ -1420,7 +1894,7 @@ App.register("settings",{
   }
 });
 App.register("sysinfo",{
-  id:"sysinfo",core:true,title:"System Info",icon:"📊",width:540,height:480,
+  id:"sysinfo",core:true,title:"System Info",icon:"📊",width:560,height:560,
   html:`<div class="sysinfo-app"></div>`,
   init(body){
     const render=()=>{
@@ -1429,10 +1903,12 @@ App.register("sysinfo",{
       const notes=Object.keys(Store.get("notes.list",{})).length;
       const files=VFS.count(),trash=Trash.count();
       const used=Store.bytes(),q=5*1024*1024,pct=Math.min(100,Math.round((used/q)*100));
+      const installedIds=Store.get("installed",INSTALLED_DEFAULT);
+      const installedChips=installedIds.map(id=>{const def=App.get(id);return def?`<span class="app-chip">${def.icon} ${esc(def.title)}</span>`:""}).join("")||`<span style="color:var(--muted);font-size:12px">No optional apps installed</span>`;
       body.innerHTML=`
-        <div class="sys-card"><h4>Web OS</h4><table><tr><td>Version</td><td>4.5</td></tr><tr><td>Device name</td><td>${esc(Settings.get().deviceName)}</td></tr><tr><td>Platform</td><td>${esc(nav.platform||"Web")}</td></tr><tr><td>CPU threads</td><td>${nav.hardwareConcurrency||"?"}</td></tr><tr><td>Memory</td><td>${esc(mem)}</td></tr><tr><td>Screen</td><td>${screen.width}×${screen.height}</td></tr><tr><td>Window</td><td>${window.innerWidth}×${window.innerHeight}</td></tr><tr><td>Online</td><td>${nav.onLine?"Yes":"No"}</td></tr><tr><td>Connection</td><td>${esc(conn.effectiveType||"—")}</td></tr></table></div>
-        <div class="sys-card"><h4>Apps & windows</h4><table><tr><td>Open windows</td><td>${Object.keys(WM.windows).length}</td></tr><tr><td>Registered apps</td><td>${App.all().length}</td></tr><tr><td>Installed</td><td>${Store.get("installed",INSTALLED_DEFAULT).length}</td></tr></table></div>
-        <div class="sys-card"><h4>Data</h4><table><tr><td>Notes</td><td>${notes}</td></tr><tr><td>Files</td><td>${files}</td></tr><tr><td>Trash</td><td>${trash}</td></tr></table><div class="bar-progress"><div style="width:${pct}%"></div></div><div style="font-size:11px;color:var(--muted);margin-top:4px">${(used/1024).toFixed(1)} KB used (${pct}%)</div></div>`;
+        <div class="sys-card"><h4>Web OS</h4><table><tr><td>Version</td><td>4.6</td></tr><tr><td>Device name</td><td>${esc(Settings.get().deviceName)}</td></tr><tr><td>Platform</td><td>${esc(nav.platform||"Web")}</td></tr><tr><td>CPU threads</td><td>${nav.hardwareConcurrency||"?"}</td></tr><tr><td>Memory</td><td>${esc(mem)}</td></tr><tr><td>Screen</td><td>${screen.width}×${screen.height}</td></tr><tr><td>Window</td><td>${window.innerWidth}×${window.innerHeight}</td></tr><tr><td>Online</td><td>${nav.onLine?"Yes":"No"}</td></tr><tr><td>Connection</td><td>${esc(conn.effectiveType||"—")}</td></tr><tr><td>User agent</td><td style="word-break:break-all;font-size:11px">${esc(nav.userAgent||"—")}</td></tr></table></div>
+        <div class="sys-card"><h4>Apps & windows</h4><table><tr><td>Open windows</td><td>${Object.keys(WM.windows).length}</td></tr><tr><td>Registered apps</td><td>${App.all().length}</td></tr><tr><td>Installed (optional)</td><td>${installedIds.length}</td></tr></table><div class="app-chip-row">${installedChips}</div></div>
+        <div class="sys-card"><h4>Data & storage</h4><table><tr><td>Notes</td><td>${notes}</td></tr><tr><td>Files</td><td>${files}</td></tr><tr><td>Trash</td><td>${trash}</td></tr></table><div class="bar-progress"><div style="width:${pct}%"></div></div><div style="font-size:11px;color:var(--muted);margin-top:4px">${(used/1024).toFixed(1)} KB of localStorage used (${pct}% of a rough 5 MB budget)</div></div>`;
     };
     render();const iv=setInterval(()=>{if(!document.body.contains(body)){clearInterval(iv);return}render()},2000);
   }
@@ -1483,9 +1959,48 @@ App.register("taskmgr",{
     const iv=setInterval(()=>{if(!document.body.contains(body)){clearInterval(iv);return}render()},1500);
   }
 });
+App.register("devtools",{
+  id:"devtools",core:true,devOnly:true,title:"Dev Tools",icon:"🧩",width:600,height:560,
+  html:`<div class="devtools-app">
+      <div class="toolbar"><button class="btn tiny dv-tab-log on">📋 Event log</button><button class="btn ghost tiny dv-tab-state">🧠 Internal state</button><span style="flex:1"></span><button class="btn ghost tiny dv-clear">🗑️ Clear log</button></div>
+      <div class="dv-list dv-panel-log"></div>
+      <pre class="dv-panel-state" hidden></pre>
+    </div>`,
+  init(body){
+    const logTab=body.querySelector(".dv-tab-log"),stateTab=body.querySelector(".dv-tab-state");
+    const logPanel=body.querySelector(".dv-panel-log"),statePanel=body.querySelector(".dv-panel-state");
+    const renderLog=()=>{
+      const items=DevLog.list();
+      logPanel.innerHTML=items.length?items.map(e=>`<div class="cb-row"><div class="cb-text"><strong>${esc(e.type)}</strong> — ${esc(String(e.detail))}</div><span class="dv-time">${timeAgo(e.at)}</span></div>`).join(""):`<div class="empty-state">No events logged yet. Interact with the OS to see activity here.</div>`;
+    };
+    const renderState=()=>{
+      const state={
+        version:"4.6",
+        openWindows:Object.keys(WM.windows),
+        registeredApps:App.all().length,
+        installedApps:Store.get("installed",INSTALLED_DEFAULT),
+        settings:Settings.get(),
+        vfsItemCount:VFS.count(),
+        trashCount:Trash.count(),
+        notesCount:Object.keys(Store.get("notes.list",{})).length,
+        clipboardHistoryCount:ClipboardHistory.list().length,
+        storageUsedBytes:Store.bytes(),
+        devLogEvents:DevLog.list().length
+      };
+      statePanel.textContent=JSON.stringify(state,null,2);
+    };
+    const showLog=()=>{logTab.classList.add("on");stateTab.classList.remove("on");logPanel.hidden=false;statePanel.hidden=true;renderLog()};
+    const showState=()=>{stateTab.classList.add("on");logTab.classList.remove("on");statePanel.hidden=false;logPanel.hidden=true;renderState()};
+    logTab.addEventListener("click",showLog);
+    stateTab.addEventListener("click",showState);
+    body.querySelector(".dv-clear").addEventListener("click",()=>{DevLog.clear();renderLog()});
+    showLog();
+    const iv=setInterval(()=>{if(!document.body.contains(body)){clearInterval(iv);return}if(!logPanel.hidden)renderLog();else renderState()},2000);
+  }
+});
 App.register("about",{
   id:"about",core:true,title:"About",icon:"ℹ️",width:440,height:400,
-  html:`<div class="about-app"><div class="about-logo">⬢</div><div style="text-align:center"><span class="version-tag">Version 4.5</span></div><p><strong>Web OS</strong> is a browser-based desktop environment built with plain HTML, CSS, and JavaScript — no frameworks, no build step.</p><p>V4.5: A real lock screen — locks on startup and after you've been idle (configurable in Security Center), plus a "Lock now" button. Desktop notifications that still reach you when this tab isn't focused (opt in from Settings). Install Web OS as its own app and use it offline (look for the install icon in your browser's address bar). A new "This PC" desktop shortcut, plus a File Manager sidebar for jumping straight to This PC, Home, or the Recycle Bin.</p><p>V4.4: Security Center (real-time protection & firewall toggles, per-app permissions, quick scan) which the Camera app now actually checks; Phone Link (simulated notification mirroring and a shared clipboard with your "phone"); and a Photos app for browsing everything the Camera has saved.</p><p>Standard APIs available to apps: Camera (photo/video), Clipboard, and persistent Storage — the same building blocks a real OS gives its apps, and the App Store is how new ones get installed.</p><p>🥚 Try the Konami code: ↑ ↑ ↓ ↓ ← → ← → B A</p></div>`
+  html:`<div class="about-app"><div class="about-logo">⬢</div><div style="text-align:center"><span class="version-tag">WebOS-v4.6.3</span></div><p><strong>Web OS</strong> is a browser-based desktop environment built with plain HTML, CSS, and JavaScript — no frameworks, no build step.</p><p>WebOS-v4.6.3 brings: a redesigned boot screen — the "Web OS" wordmark with a gradient version number, and a "Powering up dynamic desktop…" status line under the loading bar.</p><p>V4.6.2: even smoother finger-swipe paging — lighter flicks and shorter drags now move a page, velocity is averaged instead of jumpy, and a hard flick can carry across more than one page; the Code Editor now has a 👨‍💻 icon.</p><p>V4.6.1: smoother finger-swipe paging with edge rubber-band and a soft spring snap (drag the desktop, or flick, to swat pages); Terminal and Code Editor now ship as built-in system apps — no App Store install needed; the home grid on mobile is a tidy 4×4 layout (16 icons per page) so nothing feels cramped; the default icon order is tuned so the Terminal-style icon parks at row 4 / column 1 on a phone.</p><p>V4.6: A Clipboard Manager for keeping a short history of copied text; the Start Menu search (Ctrl+K) now also searches Notes and Settings, not just apps and files; Developer Mode (Settings → Advanced) adds a Dev Tools app with an event log and an internal-state inspector; and the Recycle Bin now asks for confirmation before permanently deleting anything.</p><p>V4.5: A real lock screen — locks on startup and after you've been idle (configurable in Security Center), plus a "Lock now" button. Desktop notifications that still reach you when this tab isn't focused (opt in from Settings). Install Web OS as its own app and use it offline (look for the install icon in your browser's address bar). A new "This PC" desktop shortcut, plus a File Manager sidebar for jumping straight to This PC, Home, or the Recycle Bin.</p><p>V4.4: Security Center (real-time protection & firewall toggles, per-app permissions, quick scan) which the Camera app now actually checks; Phone Link (simulated notification mirroring and a shared clipboard with your "phone"); and a Photos app for browsing everything the Camera has saved.</p><p>Standard APIs available to apps: Camera (photo/video), Clipboard, and persistent Storage — the same building blocks a real OS gives its apps, and the App Store is how new ones get installed.</p><p>🥚 Try the Konami code: ↑ ↑ ↓ ↓ ← → ← → B A</p></div>`
 });
 App.register("store",{
   id:"store",core:true,title:"App Store",icon:"🛍️",width:580,height:460,
@@ -1883,7 +2398,7 @@ App.register("phonelink",{
     body.querySelector(".pl-to-pc").addEventListener("click",async()=>{
       if(!Settings.get().permClipboard){NotifCenter.push("Phone Link","Clipboard access is blocked by Security Center.","🛡️");return}
       if(!connected){NotifCenter.push("Phone Link","Connect your phone first.","📱");return}
-      try{await navigator.clipboard.writeText(phoneClip.value||"");NotifCenter.push("Phone Link","Copied to PC clipboard.","📋")}
+      try{await navigator.clipboard.writeText(phoneClip.value||"");ClipboardHistory.add(phoneClip.value||"");NotifCenter.push("Phone Link","Copied to PC clipboard.","📋")}
       catch{NotifCenter.push("Phone Link","Couldn't reach the clipboard here — copy manually instead.","⚠️")}
     });
     body.querySelector(".pl-from-pc").addEventListener("click",async()=>{
@@ -1924,7 +2439,7 @@ App.register("photos",{
   }
 });
 App.register("terminal",{
-  id:"terminal",title:"Terminal",icon:"⌨️",width:620,height:440,desc:"Command-line shell into your Web OS files",
+  id:"terminal",core:true,title:"Terminal",icon:">_",width:620,height:440,desc:"Command-line shell into your Web OS files (built-in, no install needed)",
   html:`<div class="terminal-app">
       <div class="term-output"></div>
       <div class="term-inputrow"><span class="term-prompt"></span><input class="term-input" autocomplete="off" spellcheck="false"></div>
@@ -1995,7 +2510,7 @@ App.register("terminal",{
       neofetch(){
         printHtml(`<pre style="margin:0;font-family:inherit">⬢ webos@${esc(Settings.get().deviceName)}
 ------------------------
-OS: Web OS 4.5
+OS: Web OS 4.6
 Windows open: ${Object.keys(WM.windows).length}
 Files: ${VFS.count()}
 Uptime: ${Math.floor(performance.now()/1000)}s</pre>`);
@@ -2025,7 +2540,7 @@ Uptime: ${Math.floor(performance.now()/1000)}s</pre>`);
   }
 });
 App.register("editor",{
-  id:"editor",title:"Code Editor",icon:"🧑‍💻",width:760,height:560,desc:"Spck-style code editor: file tree, create files & folders, run HTML/JS directly",
+  id:"editor",core:true,title:"Code Editor",icon:"👨‍💻",width:760,height:560,desc:"Spck-style code editor: file tree, create files & folders, run HTML/JS directly (built-in, no install needed)",
   html:`<div class="editor-app">
       <div class="toolbar editor-tabs"></div>
       <div class="editor-body">
@@ -2357,6 +2872,30 @@ function renderCalAt(y,m){
   panel.querySelector(".cal-head strong").textContent=monthName;
   panel.querySelector(".cal-grid").innerHTML=["Su","Mo","Tu","We","Th","Fr","Sa"].map(d=>`<div class="dow">${d}</div>`).join("")+cells;
 }
+const SETTINGS_INDEX=[
+  {label:"Device name",section:"Device"},
+  {label:"Wallpaper",section:"Personalization"},
+  {label:"Accent color",section:"Personalization"},
+  {label:"Theme (dark/light/auto)",section:"Appearance"},
+  {label:"Sound effects",section:"Appearance"},
+  {label:"Window animations",section:"Appearance"},
+  {label:"Window style",section:"Appearance"},
+  {label:"Desktop icon size",section:"Appearance"},
+  {label:"Show desktop icons",section:"Appearance"},
+  {label:"Show desktop widgets",section:"Appearance"},
+  {label:"Density",section:"Appearance"},
+  {label:"Font size",section:"Appearance"},
+  {label:"High contrast",section:"Accessibility"},
+  {label:"Reduce motion",section:"Accessibility"},
+  {label:"Larger tap targets",section:"Accessibility"},
+  {label:"Desktop notifications",section:"Notifications"},
+  {label:"24-hour time",section:"Clock"},
+  {label:"Show seconds",section:"Clock"},
+  {label:"Keyboard shortcuts",section:"Shortcuts"},
+  {label:"Storage usage",section:"Storage"},
+  {label:"Reset everything",section:"Storage"},
+  {label:"Developer mode",section:"Advanced"}
+];
 const StartMenu={
   init(){
     renderStartApps();
@@ -2373,8 +2912,10 @@ const StartMenu={
     const tiles=$$(".app-tile");
     tiles.forEach(t=>{const def=App.get(t.dataset.app);const m=!q||def.title.toLowerCase().includes(q)||def.id.toLowerCase().includes(q);t.style.display=m?"":"none";t.classList.toggle("active",!!q&&m)});
     const fw=$("#startFilesWrap"),fb=$("#startFiles");
-    fb.innerHTML="";
-    if(!q){fw.hidden=true;return}
+    const nw=$("#startNotesWrap"),nb=$("#startNotes");
+    const sw=$("#startSettingsWrap"),sb=$("#startSettingsHits");
+    fb.innerHTML="";nb.innerHTML="";sb.innerHTML="";
+    if(!q){fw.hidden=true;nw.hidden=true;sw.hidden=true;return}
     fw.hidden=false;
     const hits=[];
     (function walk(node,path){
@@ -2384,7 +2925,7 @@ const StartMenu={
         if(c.type==="folder")walk(c,[...path,c.name]);
       });
     })(VFS.data,[]);
-    if(!hits.length){fb.innerHTML=`<div class="file-hit" style="cursor:default;color:var(--muted)">No matching files</div>`;return}
+    if(!hits.length){fb.innerHTML=`<div class="file-hit" style="cursor:default;color:var(--muted)">No matching files</div>`;}
     hits.forEach(h=>{
       const b=document.createElement("button");b.className="file-hit";
       b.innerHTML=`<span>${fileIcon(h.name,!h.isFile)}</span><span>${esc(h.name)}</span><span class="hit-path">${esc(h.path)}</span>`;
@@ -2401,9 +2942,30 @@ const StartMenu={
             const t=w&&w.el.querySelector(".notes-title"),a=w&&w.el.querySelector(".notes-area");
             if(t)t.value=h.name;if(a)a.value=VFS.readFile(parts,h.name)||"";
           },50);
-        }else WM.open("files");
+        }else{
+          const parts=h.path==="Home"?[]:h.path.split("/");
+          const win=WM.open("files");if(win&&win.navigateTo)win.navigateTo(parts);
+        }
       });
       fb.appendChild(b);
+    });
+    const notes=Store.get("notes.list",{});
+    const noteHits=Object.keys(notes).filter(n=>n.toLowerCase().includes(q)||(notes[n].content||"").toLowerCase().includes(q)).slice(0,8);
+    nw.hidden=!noteHits.length;
+    noteHits.forEach(n=>{
+      const b=document.createElement("button");b.className="file-hit";
+      const snippet=(notes[n].content||"").trim().slice(0,40);
+      b.innerHTML=`<span>📝</span><span>${esc(n)}</span><span class="hit-path">${esc(snippet)}</span>`;
+      b.addEventListener("click",()=>{this.close();WM.open("notes",{note:n})});
+      nb.appendChild(b);
+    });
+    const setHits=SETTINGS_INDEX.filter(s=>s.label.toLowerCase().includes(q)||s.section.toLowerCase().includes(q)).slice(0,8);
+    sw.hidden=!setHits.length;
+    setHits.forEach(s=>{
+      const b=document.createElement("button");b.className="file-hit";
+      b.innerHTML=`<span>⚙️</span><span>${esc(s.label)}</span><span class="hit-path">${esc(s.section)}</span>`;
+      b.addEventListener("click",()=>{this.close();WM.open(s.section==="Advanced"?"security":"settings")});
+      sb.appendChild(b);
     });
   }
 };
@@ -2574,9 +3136,9 @@ const Shortcuts={
 document.addEventListener("DOMContentLoaded",()=>{
   VFS.load();VFS.ensureInstalledAppsFolder();
   WM.init();Taskbar.init();StartMenu.init();Panels.init();Shortcuts.init();
-  Context.init();Widgets.init();Settings.apply();Clock.start();Boot.init();IdleLock.init();
+  Context.init();Widgets.init();DG.init();Settings.apply();Clock.start();Boot.init();IdleLock.init();
   renderDesktopIcons();renderStartApps();
-  setTimeout(()=>NotifCenter.push("Welcome to Web OS 4.5","New: a real lock screen (startup + idle auto-lock, in Security Center), opt-in desktop notifications that reach you even off-tab, and installable/offline support as a PWA.","🚀",true),2400);
+  setTimeout(()=>NotifCenter.push("Welcome to Web OS 4.6","New: a Clipboard Manager, smarter search (notes & settings), Developer Mode with Dev Tools, and safer Recycle Bin deletes.","🚀",true),2400);
 });
 if("serviceWorker" in navigator){
   window.addEventListener("load",()=>{navigator.serviceWorker.register("sw.js").catch(()=>{})});

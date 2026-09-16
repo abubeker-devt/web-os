@@ -1,4 +1,4 @@
-const CACHE = "webos-shell-v4.5";
+const CACHE = "webos-shell-v4.6.3";
 const ASSETS = [
   "./",
   "./index.html",

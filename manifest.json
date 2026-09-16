@@ -1,7 +1,8 @@
 {
-  "name": "Web OS",
-  "short_name": "Web OS",
-  "description": "A browser-based desktop environment — plain HTML, CSS, and JavaScript.",
+  "name": "WebOS-v4.6.3",
+  "short_name": "WebOS-v4.6.3",
+  "description": "WebOS-v4.6.3 — a browser-based desktop environment with smooth swipe paging, built-in Terminal & Code Editor, and a tidy 4×4 mobile grid. Plain HTML, CSS, and JavaScript.",
+  "version": "4.6.3",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
