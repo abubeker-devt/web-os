@@ -9,7 +9,7 @@ A responsive browser-based desktop environment for desktop and mobile, built wit
 
 ## 👨‍💻 Developer
 
-Abubeker Muhidin
+**Abubeker Muhidin Seid**
 
 Built as a learning and portfolio project while developing skills in frontend web development.
 
