@@ -126,9 +126,13 @@ Open `index.html` in a browser.
 No framework.  
 No build step.
 
-## 📌 Project Status
+ ## 📌 Project Status
 
-Web OS is an ongoing personal project. New versions and features are being developed progressively.
+**Web OS 4.6.3 is the final version of this project.**
+
+The project was developed progressively from V1 to V4.6.3, with each version adding new features and improving the desktop experience.
+
+This project is now complete, and I’m moving on to new projects to continue developing my web-development skills.
 
 ## 🧱 Project Structure
 
