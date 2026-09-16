@@ -117,7 +117,6 @@ Earth Sciences student at Addis Ababa University and Web Development student at 
 | **V3** | Advanced features and dynamic applications | [View](https://github.com/abubeker-devt/web-os/commit/6b7277f) |
 | **V4.1** | Improved File Manager, Camera, mobile UI, and notifications | [View](https://github.com/abubeker-devt/web-os/commit/581674e) |
 | **V4.3** | System and data management | [View](https://github.com/abubeker-devt/web-os/commit/0d967b9) |
-| **V4.4** | Security Center, Phone Link, Photos, and system improvements | — |
 | **V4.5** | Lock screen and PWA/offline support | [View](https://github.com/abubeker-devt/web-os/commit/0fde6e3) |
 | **V4.6.3** | Latest Web OS improvements | [View commit](https://github.com/abubeker-devt/web-os/commit/b4ff6000c235a2b507d9045611d374b3f165d746) |
 
