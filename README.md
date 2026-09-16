@@ -119,12 +119,13 @@ Built as a learning and portfolio project while developing skills in frontend we
 | **V4.5** | Lock screen and PWA/offline support | [View](https://github.com/abubeker-devt/web-os/commit/0fde6e3) |
 | **V4.6.3** | Latest Web OS improvements | [View commit](https://github.com/abubeker-devt/web-os/commit/b4ff6000c235a2b507d9045611d374b3f165d746) |
 
-## 🚀 Run
+ 🚀 Run
 
-Open `index.html` in a browser.
+### Local
+Open `index.html` in a browser for the basic desktop experience.
 
-No framework.  
-No build step.
+### Online
+The recommended way to experience the full project, including PWA features, is through the deployed version.
 
  ## 📌 Project Status
 
