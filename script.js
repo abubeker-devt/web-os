@@ -284,6 +284,13 @@ const NotifCenter={
     const l=this.list();l.unshift({title,msg,icon,at:Date.now(),read:false});this.save(l);this.unread++;this.renderBadge();
     toast(title,msg,icon,sticky);
     SFX.notif();
+    this.notifyOS(title,msg);
+  },
+  notifyOS(title,msg){
+    if(!Settings.get().systemNotifs)return;
+    if(typeof Notification==="undefined"||Notification.permission!=="granted")return;
+    if(document.visibilityState==="visible"&&document.hasFocus())return;
+    try{const n=new Notification(title,{body:msg,icon:"icons/icon-192.png",tag:"webos-"+Date.now()});n.onclick=()=>{window.focus();n.close()}}catch{}
   },
   log(title,msg,icon="🔔"){
     const l=this.list();l.unshift({title,msg,icon,at:Date.now(),read:false});this.save(l);this.unread++;this.renderBadge();
@@ -330,7 +337,7 @@ function actionToast(title,msg,icon,actionLabel,callback,timeout=6000){
   el.querySelector(".toast-action").addEventListener("click",()=>{clearTimeout(t);finish();callback&&callback()});
 }
 const Settings={
-  defaults:{wallpaper:"aurora",theme:"dark",accent:"purple",winStyle:"glass",iconSize:"medium",showIcons:true,widgets:true,density:"comfortable",fontSize:15,snapEnabled:true,sounds:true,winAnim:true,deviceName:"WebOS Device",highContrast:false,reduceMotion:false,largeTargets:false},
+  defaults:{wallpaper:"aurora",theme:"dark",accent:"purple",winStyle:"glass",iconSize:"medium",showIcons:true,widgets:true,density:"comfortable",fontSize:15,snapEnabled:true,sounds:true,winAnim:true,deviceName:"WebOS Device",highContrast:false,reduceMotion:false,largeTargets:false,realtimeProtection:true,firewallOn:true,permCamera:true,permClipboard:true,permLocation:true,lockOnBoot:true,autoLockEnabled:true,autoLockMinutes:5,systemNotifs:false},
   get(){return Object.assign({},this.defaults,Store.get("settings",{}))},
   set(p){Store.set("settings",Object.assign(this.get(),p));this.apply()},
   apply(){
@@ -585,7 +592,7 @@ const Taskbar={
 };
 function renderStartApps(){
   const box=$("#startApps");if(!box)return;box.innerHTML="";
-  App.visible().forEach(def=>{
+  App.visible().filter(def=>!def.desktopOnly).forEach(def=>{
     const tile=document.createElement("button");
     tile.className="app-tile";
     tile.dataset.app=def.id;
@@ -595,10 +602,11 @@ function renderStartApps(){
   });
 }
 const ICON_COLORS={
-  notes:"#ffc857",files:"#4db8ff",trash:"#8a93a6",calculator:"#3ecf8e",
+  thispc:"#5b7fd6",notes:"#ffc857",files:"#4db8ff",trash:"#8a93a6",calculator:"#3ecf8e",
   browser:"#4d7dff",settings:"#8a93a6",paint:"#ff4da6",weather:"#4db8ff",
   music:"#7a5cff",game:"#ff9f43",store:"#3ecf8e",sysinfo:"#7a5cff",about:"#ff5c5c",
-  camera:"#3a3d46",taskmgr:"#ff6b6b",editor:"#2f6fed",terminal:"#1c1c22",pdfviewer:"#e5484d"
+  camera:"#3a3d46",taskmgr:"#ff6b6b",editor:"#2f6fed",terminal:"#1c1c22",pdfviewer:"#e5484d",
+  security:"#2ecc71",phonelink:"#4d7dff",photos:"#ff9f43"
 };
 function renderDesktopIcons(){
   const box=$("#desktopIcons");if(!box)return;
@@ -606,7 +614,7 @@ function renderDesktopIcons(){
   if(!Settings.get().showIcons)return;
   desktopIcons=[];
   const installed=Store.get("installed",INSTALLED_DEFAULT);
-  const order=["notes","files","trash","calculator","browser","camera","taskmgr","settings","paint","weather","music","game","store","sysinfo","about"];
+  const order=["thispc","notes","files","trash","calculator","browser","camera","photos","security","phonelink","taskmgr","settings","paint","weather","music","game","store","sysinfo","about"];
   order.concat(installed).forEach(id=>{
     if(desktopIcons.includes(id))return;
     const def=App.get(id);if(!def||(!def.core&&!installed.includes(id)))return;
@@ -697,38 +705,49 @@ App.register("notes",{
     if(win.args&&win.args.note){const l=get();const n=l[win.args.note];if(n){titleEl.value=win.args.note;areaEl.value=n.content;markSaved();updCounts();renderList()}}
   }
 });
-App.register("files",{
+const filesAppDef={
   id:"files",core:true,title:"File Manager",icon:"📁",width:680,height:480,
   html:`
     <div class="files-app">
-      <div class="toolbar"><button class="btn ghost tiny files-up" title="Up">⬆</button><div class="crumb-bar"></div></div>
-      <div class="toolbar"><input class="input files-search" placeholder="Search…" style="flex:1;min-width:100px"><select class="select files-sort"><option value="name">Name</option><option value="type">Type</option><option value="date">Date</option><option value="size">Size</option></select></div>
-      <div class="toolbar">
-        <button class="btn tiny files-new-file">📄 New</button>
-        <button class="btn ghost tiny files-new-folder">📂 Folder</button>
-        <button class="btn ghost tiny files-select-mode">☑️ Select</button>
-        <button class="btn ghost tiny files-props">ℹ️ Properties</button>
-        <button class="btn ghost tiny files-rename">✏️ Rename</button>
-        <button class="btn ghost tiny files-copy">📋 Copy</button>
-        <button class="btn ghost tiny files-cut">✂️ Cut</button>
-        <button class="btn ghost tiny files-paste">📌 Paste</button>
-        <button class="btn ghost tiny files-move">🗂️ Move to…</button>
-        <button class="btn ghost tiny files-openwith">🚀 Open with…</button>
-        <button class="btn ghost tiny files-compress">🗜️ Compress</button>
-        <button class="btn ghost tiny files-extract">📦 Extract</button>
-        <button class="btn ghost tiny files-upload">⬆️ Upload…</button>
-        <button class="btn ghost tiny files-delete">🗑️ Delete</button>
+      <div class="files-body">
+        <div class="files-sidebar">
+          <button class="files-nav-item" data-nav="root"><span class="files-nav-icon">🖥️</span><span>This PC</span></button>
+          <button class="files-nav-item" data-nav="root"><span class="files-nav-icon">🏠</span><span>Home</span></button>
+          <button class="files-nav-item" data-nav="trash"><span class="files-nav-icon">🗑️</span><span>Recycle Bin</span></button>
+        </div>
+        <div class="files-main">
+          <div class="toolbar"><button class="btn ghost tiny files-up" title="Up">⬆</button><div class="crumb-bar"></div></div>
+          <div class="toolbar"><input class="input files-search" placeholder="Search…" style="flex:1;min-width:100px"><select class="select files-sort"><option value="name">Name</option><option value="type">Type</option><option value="date">Date</option><option value="size">Size</option></select></div>
+          <div class="toolbar">
+            <button class="btn tiny files-new-file">📄 New</button>
+            <button class="btn ghost tiny files-new-folder">📂 Folder</button>
+            <button class="btn ghost tiny files-select-mode">☑️ Select</button>
+            <button class="btn ghost tiny files-props">ℹ️ Properties</button>
+            <button class="btn ghost tiny files-rename">✏️ Rename</button>
+            <button class="btn ghost tiny files-copy">📋 Copy</button>
+            <button class="btn ghost tiny files-cut">✂️ Cut</button>
+            <button class="btn ghost tiny files-paste">📌 Paste</button>
+            <button class="btn ghost tiny files-move">🗂️ Move to…</button>
+            <button class="btn ghost tiny files-openwith">🚀 Open with…</button>
+            <button class="btn ghost tiny files-compress">🗜️ Compress</button>
+            <button class="btn ghost tiny files-extract">📦 Extract</button>
+            <button class="btn ghost tiny files-upload">⬆️ Upload…</button>
+            <button class="btn ghost tiny files-delete">🗑️ Delete</button>
+          </div>
+          <div class="folder-grid"></div>
+          <input type="file" class="files-upload-input" multiple hidden>
+          <div style="font-size:11px;color:var(--muted);display:flex;justify-content:space-between"><span class="files-stats">0 items</span><span class="files-clip"></span></div>
+        </div>
       </div>
-      <div class="folder-grid"></div>
-      <input type="file" class="files-upload-input" multiple hidden>
-      <div style="font-size:11px;color:var(--muted);display:flex;justify-content:space-between"><span class="files-stats">0 items</span><span class="files-clip"></span></div>
     </div>`,
   init(body){
     let cwd=[];let selSet=new Set();let lastClicked=null;let clip=null;let multiMode=false;
     const grid=body.querySelector(".folder-grid"),crumbsEl=body.querySelector(".crumb-bar"),searchEl=body.querySelector(".files-search"),sortSel=body.querySelector(".files-sort"),statsEl=body.querySelector(".files-stats"),clipEl=body.querySelector(".files-clip"),selectModeBtn=body.querySelector(".files-select-mode");
     const sorted=items=>{const mode=sortSel.value;return[...items].sort((a,b)=>{if(a.type!==b.type)return a.type==="folder"?-1:1;if(mode==="date")return(b.modified||0)-(a.modified||0);if(mode==="size")return((b.type==="file"?(b.content||"").length:Object.keys(b.children||{}).length)-((a.type==="file"?(a.content||"").length:Object.keys(a.children||{}).length)));if(mode==="type"){const ea=(a.name.split(".").pop()||""),eb=(b.name.split(".").pop()||"");return ea===eb?a.name.localeCompare(b.name):ea.localeCompare(eb)}return a.name.localeCompare(b.name)})};
+    const navItems=[...body.querySelectorAll(".files-nav-item")];
     const renderCrumbs=()=>{
       crumbsEl.innerHTML=`<button class="crumb${cwd.length?"":" current"}" data-i="-1">🏠 Home</button>`+cwd.map((p,i)=>`<span class="crumb-sep">›</span><button class="crumb${i===cwd.length-1?" current":""}" data-i="${i}">${esc(p)}</button>`).join("");
+      navItems.forEach(n=>n.classList.toggle("active",n.dataset.nav==="root"&&cwd.length===0));
     };
     const updateClip=()=>{clipEl.textContent=clip?`Clipboard: ${clip.mode} ${clip.names.length>1?clip.names.length+" items":'"'+clip.names[0]+'"'}`:selSet.size?`${selSet.size} selected`:"Clipboard empty"};
     VFS.renderCurrent=()=>{
@@ -817,6 +836,10 @@ App.register("files",{
       const win=WM.windows["win-notes"];
       if(win){setTimeout(()=>{const t=win.el.querySelector(".notes-title"),a=win.el.querySelector(".notes-area");if(t)t.value=item.name;if(a)a.value=content||""},30)}
     };
+    navItems.forEach(n=>n.addEventListener("click",()=>{
+      if(n.dataset.nav==="trash"){WM.open("trash");return}
+      cwd=[];searchEl.value="";selSet.clear();VFS.renderCurrent();
+    }));
     body.querySelector(".files-up").addEventListener("click",()=>{if(cwd.length){cwd=cwd.slice(0,-1);searchEl.value="";selSet.clear();VFS.renderCurrent()}});
     crumbsEl.addEventListener("click",e=>{const c=e.target.closest(".crumb");if(!c)return;const i=Number(c.dataset.i);cwd=i<0?[]:cwd.slice(0,i+1);searchEl.value="";selSet.clear();VFS.renderCurrent()});
     searchEl.addEventListener("input",debounce(VFS.renderCurrent,80));
@@ -979,7 +1002,9 @@ App.register("files",{
     grid.addEventListener("click",e=>{if(e.target===grid){selSet.clear();VFS.renderCurrent();updateClip()}});
     updateClip();VFS.renderCurrent();
   }
-});
+};
+App.register("files",filesAppDef);
+App.register("thispc",Object.assign({},filesAppDef,{id:"thispc",title:"This PC",icon:"🖥️",desktopOnly:true}));
 const FolderPicker={
   open(startFrom,onPick){
     const old=$("#folderPicker");if(old)old.remove();
@@ -1320,6 +1345,9 @@ App.register("settings",{
         <div class="set-row"><span>Reduce motion</span><button class="toggle s-reducemotion"></button></div>
         <div class="set-row"><span>Larger tap targets</span><button class="toggle s-largetargets"></button></div>
       </div>
+      <div class="set-section"><h4>Notifications</h4>
+        <div class="set-row"><span>Desktop notifications (even when this tab isn't focused)</span><button class="toggle s-sysnotifs"></button></div>
+      </div>
       <div class="set-section"><h4>Clock</h4>
         <div class="set-row"><span>24-hour time</span><button class="toggle s-clock24"></button></div>
         <div class="set-row"><span>Show seconds</span><button class="toggle s-seconds"></button></div>
@@ -1367,6 +1395,19 @@ App.register("settings",{
     T(".s-showicons","showIcons");T(".s-widgets","widgets");T(".s-clock24","clock24");T(".s-seconds","seconds");
     T(".s-sounds","sounds");T(".s-winanim","winAnim");
     T(".s-highcontrast","highContrast");T(".s-reducemotion","reduceMotion");T(".s-largetargets","largeTargets");
+    const notifToggle=body.querySelector(".s-sysnotifs");
+    const syncNotifToggle=()=>notifToggle.classList.toggle("on",Settings.get().systemNotifs);
+    syncNotifToggle();
+    notifToggle.addEventListener("click",async()=>{
+      const turningOn=!Settings.get().systemNotifs;
+      if(turningOn){
+        if(typeof Notification==="undefined"){NotifCenter.push("Settings","Notifications aren't supported in this browser.","⚠️");return}
+        const perm=await Notification.requestPermission();
+        if(perm!=="granted"){NotifCenter.push("Settings","Notification permission was denied.","⚠️");return}
+      }
+      Settings.set({systemNotifs:turningOn});syncNotifToggle();
+      NotifCenter.push("Settings",`Desktop notifications ${turningOn?"enabled":"disabled"}.`,"🔔");
+    });
     const updStorage=()=>{body.querySelector(".s-storage-used").textContent=`${(Store.bytes()/1024).toFixed(1)} KB used`};
     updStorage();
     body.querySelector(".s-reset").addEventListener("click",()=>{
@@ -1389,7 +1430,7 @@ App.register("sysinfo",{
       const files=VFS.count(),trash=Trash.count();
       const used=Store.bytes(),q=5*1024*1024,pct=Math.min(100,Math.round((used/q)*100));
       body.innerHTML=`
-        <div class="sys-card"><h4>Web OS</h4><table><tr><td>Version</td><td>4.2</td></tr><tr><td>Device name</td><td>${esc(Settings.get().deviceName)}</td></tr><tr><td>Platform</td><td>${esc(nav.platform||"Web")}</td></tr><tr><td>CPU threads</td><td>${nav.hardwareConcurrency||"?"}</td></tr><tr><td>Memory</td><td>${esc(mem)}</td></tr><tr><td>Screen</td><td>${screen.width}×${screen.height}</td></tr><tr><td>Window</td><td>${window.innerWidth}×${window.innerHeight}</td></tr><tr><td>Online</td><td>${nav.onLine?"Yes":"No"}</td></tr><tr><td>Connection</td><td>${esc(conn.effectiveType||"—")}</td></tr></table></div>
+        <div class="sys-card"><h4>Web OS</h4><table><tr><td>Version</td><td>4.5</td></tr><tr><td>Device name</td><td>${esc(Settings.get().deviceName)}</td></tr><tr><td>Platform</td><td>${esc(nav.platform||"Web")}</td></tr><tr><td>CPU threads</td><td>${nav.hardwareConcurrency||"?"}</td></tr><tr><td>Memory</td><td>${esc(mem)}</td></tr><tr><td>Screen</td><td>${screen.width}×${screen.height}</td></tr><tr><td>Window</td><td>${window.innerWidth}×${window.innerHeight}</td></tr><tr><td>Online</td><td>${nav.onLine?"Yes":"No"}</td></tr><tr><td>Connection</td><td>${esc(conn.effectiveType||"—")}</td></tr></table></div>
         <div class="sys-card"><h4>Apps & windows</h4><table><tr><td>Open windows</td><td>${Object.keys(WM.windows).length}</td></tr><tr><td>Registered apps</td><td>${App.all().length}</td></tr><tr><td>Installed</td><td>${Store.get("installed",INSTALLED_DEFAULT).length}</td></tr></table></div>
         <div class="sys-card"><h4>Data</h4><table><tr><td>Notes</td><td>${notes}</td></tr><tr><td>Files</td><td>${files}</td></tr><tr><td>Trash</td><td>${trash}</td></tr></table><div class="bar-progress"><div style="width:${pct}%"></div></div><div style="font-size:11px;color:var(--muted);margin-top:4px">${(used/1024).toFixed(1)} KB used (${pct}%)</div></div>`;
     };
@@ -1444,7 +1485,7 @@ App.register("taskmgr",{
 });
 App.register("about",{
   id:"about",core:true,title:"About",icon:"ℹ️",width:440,height:400,
-  html:`<div class="about-app"><div class="about-logo">⬢</div><div style="text-align:center"><span class="version-tag">Version 4.2</span></div><p><strong>Web OS</strong> is a browser-based desktop environment built with plain HTML, CSS, and JavaScript — no frameworks, no build step.</p><p>V4.2: Terminal, Code Editor, and PDF Viewer apps; real window snapping with quarter-tiling and a live preview; an Alt-Tab window switcher; a Task Manager; drag-and-drop uploads and zip compress/extract in File Manager; sound effects, window animations, and an Auto (system) theme.</p><p>Latest update: Code Editor now has a file tree sidebar (create files & folders right from it) and a ▶ Run button that previews HTML/JS live. Zip extraction is fixed — correct image types, no double-nested folders, no race condition on first use.</p><p>Standard APIs available to apps: Camera (photo/video), Clipboard, and persistent Storage — the same building blocks a real OS gives its apps, and the App Store is how new ones get installed.</p><p>🥚 Try the Konami code: ↑ ↑ ↓ ↓ ← → ← → B A</p></div>`
+  html:`<div class="about-app"><div class="about-logo">⬢</div><div style="text-align:center"><span class="version-tag">Version 4.5</span></div><p><strong>Web OS</strong> is a browser-based desktop environment built with plain HTML, CSS, and JavaScript — no frameworks, no build step.</p><p>V4.5: A real lock screen — locks on startup and after you've been idle (configurable in Security Center), plus a "Lock now" button. Desktop notifications that still reach you when this tab isn't focused (opt in from Settings). Install Web OS as its own app and use it offline (look for the install icon in your browser's address bar). A new "This PC" desktop shortcut, plus a File Manager sidebar for jumping straight to This PC, Home, or the Recycle Bin.</p><p>V4.4: Security Center (real-time protection & firewall toggles, per-app permissions, quick scan) which the Camera app now actually checks; Phone Link (simulated notification mirroring and a shared clipboard with your "phone"); and a Photos app for browsing everything the Camera has saved.</p><p>Standard APIs available to apps: Camera (photo/video), Clipboard, and persistent Storage — the same building blocks a real OS gives its apps, and the App Store is how new ones get installed.</p><p>🥚 Try the Konami code: ↑ ↑ ↓ ↓ ← → ← → B A</p></div>`
 });
 App.register("store",{
   id:"store",core:true,title:"App Store",icon:"🛍️",width:580,height:460,
@@ -1636,6 +1677,7 @@ App.register("camera",{
       video.style.transform=(facing==="user"?"scaleX(-1) ":"")+`scale(${v})`;
     };
     const start=async()=>{
+      if(!Settings.get().permCamera){setMsg("Camera access is blocked by Security Center. Enable it in Security Center → App permissions.");return}
       if(typeof navigator.mediaDevices==="undefined"||!navigator.mediaDevices.getUserMedia){setMsg("Camera isn't available in this browser context.");return}
       stopStream();setMsg("Starting camera…");
       try{
@@ -1713,6 +1755,174 @@ App.register("camera",{
     App.get("camera").onClose=stopAll;
   }
 });
+App.register("security",{
+  id:"security",core:true,title:"Security Center",icon:"🛡️",width:520,height:600,desc:"Protection status, firewall, and app permissions",
+  html:`<div class="settings-app">
+      <div class="set-section sec-status"></div>
+      <div class="set-section"><h4>Protection</h4>
+        <div class="set-row"><span>Real-time protection</span><button class="toggle sec-realtime"></button></div>
+        <div class="set-row"><span>Firewall</span><button class="toggle sec-firewall"></button></div>
+      </div>
+      <div class="set-section"><h4>App permissions</h4>
+        <div class="set-row"><span>📷 Camera</span><button class="toggle sec-camera"></button></div>
+        <div class="set-row"><span>📋 Clipboard</span><button class="toggle sec-clipboard"></button></div>
+        <div class="set-row"><span>📍 Location</span><button class="toggle sec-location"></button></div>
+      </div>
+      <div class="set-section"><h4>Lock screen</h4>
+        <div class="set-row"><span>Lock on startup</span><button class="toggle sec-lockboot"></button></div>
+        <div class="set-row"><span>Auto-lock when idle</span><button class="toggle sec-autolock"></button></div>
+        <div class="set-row"><span>Lock after</span><select class="select sec-lockmins"><option value="1">1 minute</option><option value="3">3 minutes</option><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option></select></div>
+        <div class="set-row"><span></span><button class="btn ghost tiny sec-locknow">🔒 Lock now</button></div>
+      </div>
+      <div class="set-section"><h4>Quick scan</h4>
+        <div class="set-row"><span class="sec-scan-status">Last scan: never</span><button class="btn tiny sec-scan">🔍 Scan now</button></div>
+        <div class="bar-progress sec-scan-bar" hidden><div style="width:0%"></div></div>
+      </div>
+    </div>`,
+  init(body){
+    const statusEl=body.querySelector(".sec-status");
+    const renderStatus=()=>{
+      const s=Settings.get(),safe=s.realtimeProtection&&s.firewallOn;
+      statusEl.innerHTML=`<div style="text-align:center;padding:6px 0 10px">
+          <div style="font-size:40px;line-height:1">${safe?"🛡️":"⚠️"}</div>
+          <div style="font-size:15px;font-weight:600;color:${safe?"var(--accent)":"#ff8a8a"}">${safe?"Protected":"At risk"}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">${safe?"Real-time protection and the firewall are both active.":"Turn on real-time protection and the firewall to stay protected."}</div>
+        </div>`;
+    };
+    const T=(sel,key,label,extra)=>{
+      const el=body.querySelector(sel);
+      const sync=()=>el.classList.toggle("on",!!Settings.get()[key]);
+      sync();
+      el.addEventListener("click",()=>{
+        const v=!Settings.get()[key];Settings.set({[key]:v});sync();renderStatus();
+        NotifCenter.push("Security Center",`${label} ${v?"enabled":"disabled"}.`,"🛡️");
+        if(extra)extra(v);
+      });
+    };
+    T(".sec-realtime","realtimeProtection","Real-time protection");
+    T(".sec-firewall","firewallOn","Firewall");
+    T(".sec-camera","permCamera","Camera access");
+    T(".sec-clipboard","permClipboard","Clipboard access");
+    T(".sec-location","permLocation","Location access");
+    T(".sec-lockboot","lockOnBoot","Lock on startup");
+    T(".sec-autolock","autoLockEnabled","Auto-lock",()=>IdleLock.reset());
+    renderStatus();
+    const minsSel=body.querySelector(".sec-lockmins");
+    minsSel.value=String(Settings.get().autoLockMinutes);
+    minsSel.addEventListener("change",()=>{
+      Settings.set({autoLockMinutes:Number(minsSel.value)});IdleLock.reset();
+      NotifCenter.push("Security Center",`Auto-lock after ${minsSel.value} minute${minsSel.value==="1"?"":"s"}.`,"🔒");
+    });
+    body.querySelector(".sec-locknow").addEventListener("click",()=>Lock.show());
+    const scanBtn=body.querySelector(".sec-scan"),scanStatus=body.querySelector(".sec-scan-status"),bar=body.querySelector(".sec-scan-bar"),fill=bar.querySelector("div");
+    const showLastScan=()=>{const t=Store.get("security.lastScan",null);scanStatus.textContent=t?`Last scan: ${timeAgo(t)} — 0 threats found`:"Last scan: never"};
+    showLastScan();
+    scanBtn.addEventListener("click",()=>{
+      if(scanBtn.disabled)return;
+      scanBtn.disabled=true;bar.hidden=false;fill.style.width="0%";
+      const files=VFS.count();let pct=0;
+      const iv=setInterval(()=>{
+        pct=Math.min(100,pct+10+Math.random()*15);
+        fill.style.width=pct+"%";
+        if(pct>=100){
+          clearInterval(iv);
+          Store.set("security.lastScan",Date.now());showLastScan();
+          setTimeout(()=>{bar.hidden=true;scanBtn.disabled=false},400);
+          NotifCenter.push("Security Center",`Scan complete — ${files} files checked, 0 threats found.`,"✅");
+        }
+      },180);
+    });
+  }
+});
+App.register("phonelink",{
+  id:"phonelink",core:true,title:"Phone Link",icon:"📱",width:420,height:620,desc:"Simulated notification mirroring and shared clipboard with your phone",
+  html:`<div class="settings-app">
+      <div class="set-section pl-device"></div>
+      <div class="set-section"><h4>Mirrored notifications</h4>
+        <div class="pl-notifs" style="display:flex;flex-direction:column;gap:2px;max-height:150px;overflow-y:auto"></div>
+        <button class="btn ghost tiny pl-simulate" style="margin-top:8px">📩 Simulate incoming notification</button>
+      </div>
+      <div class="set-section"><h4>Shared clipboard</h4>
+        <div class="set-row"><span>Phone clipboard</span></div>
+        <textarea class="input pl-phone-clip" rows="2" style="width:100%;resize:vertical" placeholder="Text “copied” on your phone…"></textarea>
+        <div class="toolbar" style="margin-top:8px"><button class="btn ghost tiny pl-to-pc">⬆ Send to PC clipboard</button><button class="btn ghost tiny pl-from-pc">⬇ Pull from PC clipboard</button></div>
+      </div>
+    </div>`,
+  init(body){
+    const deviceEl=body.querySelector(".pl-device"),notifsEl=body.querySelector(".pl-notifs");
+    let connected=Store.get("phonelink.connected",true);
+    const battery=62,signal=3;
+    const renderDevice=()=>{
+      deviceEl.innerHTML=`
+        <div class="set-row"><span>📱 My Phone</span><button class="toggle pl-conn${connected?" on":""}"></button></div>
+        <div class="set-row"><span>Status</span><span style="color:${connected?"var(--accent)":"var(--muted)"}">${connected?"Connected":"Disconnected"}</span></div>
+        <div class="set-row"><span>Battery</span><span>${connected?battery+"%":"—"}</span></div>
+        <div class="set-row"><span>Signal</span><span>${connected?"📶".repeat(signal):"—"}</span></div>`;
+      deviceEl.querySelector(".pl-conn").addEventListener("click",()=>{
+        connected=!connected;Store.set("phonelink.connected",connected);renderDevice();
+        NotifCenter.push("Phone Link",connected?"Phone connected.":"Phone disconnected.","📱");
+      });
+    };
+    renderDevice();
+    const NAMES=["Messages","Instagram","Gmail","WhatsApp","Calendar","Spotify"];
+    const ICONS2={Messages:"💬",Instagram:"📸",Gmail:"📧",WhatsApp:"🟢",Calendar:"📅",Spotify:"🎧"};
+    const TEXTS=["Mom: call me when you're free","New comment on your photo","Sign-in alert on your account","Sent you a voice message","Study group starts in 30 min","Added to your Discover Weekly"];
+    let mirrored=Store.get("phonelink.notifs",[]);
+    const renderNotifs=()=>{
+      notifsEl.innerHTML=mirrored.length?mirrored.map(n=>`<div class="set-row"><span>${n.icon} <strong>${esc(n.app)}</strong> — ${esc(n.text)}</span><span style="color:var(--muted);font-size:11px;white-space:nowrap">${timeAgo(n.at)}</span></div>`).join(""):`<div style="color:var(--muted);font-size:12px;padding:6px 0">No notifications mirrored yet.</div>`;
+    };
+    renderNotifs();
+    body.querySelector(".pl-simulate").addEventListener("click",()=>{
+      if(!connected){NotifCenter.push("Phone Link","Connect your phone first.","📱");return}
+      const app=NAMES[Math.floor(Math.random()*NAMES.length)];
+      const n={app,icon:ICONS2[app],text:TEXTS[Math.floor(Math.random()*TEXTS.length)],at:Date.now()};
+      mirrored=[n,...mirrored].slice(0,20);Store.set("phonelink.notifs",mirrored);renderNotifs();
+      NotifCenter.push(app,n.text,n.icon);
+    });
+    const phoneClip=body.querySelector(".pl-phone-clip");
+    body.querySelector(".pl-to-pc").addEventListener("click",async()=>{
+      if(!Settings.get().permClipboard){NotifCenter.push("Phone Link","Clipboard access is blocked by Security Center.","🛡️");return}
+      if(!connected){NotifCenter.push("Phone Link","Connect your phone first.","📱");return}
+      try{await navigator.clipboard.writeText(phoneClip.value||"");NotifCenter.push("Phone Link","Copied to PC clipboard.","📋")}
+      catch{NotifCenter.push("Phone Link","Couldn't reach the clipboard here — copy manually instead.","⚠️")}
+    });
+    body.querySelector(".pl-from-pc").addEventListener("click",async()=>{
+      if(!Settings.get().permClipboard){NotifCenter.push("Phone Link","Clipboard access is blocked by Security Center.","🛡️");return}
+      if(!connected){NotifCenter.push("Phone Link","Connect your phone first.","📱");return}
+      try{const t=await navigator.clipboard.readText();phoneClip.value=t;NotifCenter.push("Phone Link","Pulled the PC clipboard into the phone box.","📋")}
+      catch{NotifCenter.push("Phone Link","The browser blocked reading the clipboard — paste manually instead.","⚠️")}
+    });
+  }
+});
+App.register("photos",{
+  id:"photos",core:true,title:"Photos",icon:"🖼️",width:640,height:520,desc:"Gallery for photos captured with the Camera app",
+  html:`<div class="photos-app" style="display:flex;flex-direction:column;gap:10px;height:100%;position:relative">
+      <div class="toolbar"><strong style="flex:1">Pictures</strong><button class="btn ghost tiny ph-refresh">🔄 Refresh</button></div>
+      <div class="photos-grid" style="flex:1;min-height:0;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px"></div>
+    </div>`,
+  init(body){
+    const grid=body.querySelector(".photos-grid"),root=body.querySelector(".photos-app");
+    const render=()=>{
+      const folder=VFS.resolve(["Pictures"]);
+      const items=folder?Object.values(folder.children).filter(f=>f.type==="file"):[];
+      if(!items.length){grid.innerHTML=`<div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:30px 10px">No photos yet — take one with 📷 Camera.</div>`;return}
+      items.sort((a,b)=>b.created-a.created);
+      grid.innerHTML=items.map(f=>`<div class="ph-tile" data-name="${esc(f.name)}" title="${esc(f.name)}" style="border-radius:10px;overflow:hidden;aspect-ratio:1;cursor:pointer;background:var(--control) center/cover no-repeat;background-image:url('${f.content}')"></div>`).join("");
+    };
+    grid.addEventListener("click",e=>{
+      const t=e.target.closest(".ph-tile");if(!t)return;
+      const folder=VFS.resolve(["Pictures"]);const f=folder&&folder.children[t.dataset.name];if(!f)return;
+      const ov=document.createElement("div");
+      ov.style.cssText="position:absolute;inset:0;background:rgba(0,0,0,.85);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;z-index:5;border-radius:inherit";
+      ov.innerHTML=`<img src="${f.content}" style="max-width:90%;max-height:78%;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.5)"><div style="display:flex;gap:8px"><button class="btn ghost tiny ph-close">Close</button><button class="btn ghost tiny ph-del">🗑️ Delete</button></div>`;
+      root.appendChild(ov);
+      ov.querySelector(".ph-close").addEventListener("click",()=>ov.remove());
+      ov.querySelector(".ph-del").addEventListener("click",()=>{Trash.put(["Pictures"],f.name);ov.remove();render();refreshAll();NotifCenter.push("Photos","Photo moved to Recycle Bin.","🗑️")});
+    });
+    body.querySelector(".ph-refresh").addEventListener("click",render);
+    render();
+  }
+});
 App.register("terminal",{
   id:"terminal",title:"Terminal",icon:"⌨️",width:620,height:440,desc:"Command-line shell into your Web OS files",
   html:`<div class="terminal-app">
@@ -1785,7 +1995,7 @@ App.register("terminal",{
       neofetch(){
         printHtml(`<pre style="margin:0;font-family:inherit">⬢ webos@${esc(Settings.get().deviceName)}
 ------------------------
-OS: Web OS 4.2
+OS: Web OS 4.5
 Windows open: ${Object.keys(WM.windows).length}
 Files: ${VFS.count()}
 Uptime: ${Math.floor(performance.now()/1000)}s</pre>`);
@@ -2246,6 +2456,7 @@ const Lock={
     if(!this.el)return;
     clearInterval(this.timer);
     this.el.remove();this.el=null;this.timer=null;
+    IdleLock.reset();
   },
   tick(){
     if(!this.el)return;
@@ -2253,6 +2464,19 @@ const Lock={
     const t=now.toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"});
     const d=now.toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric"});
     this.el.innerHTML=`<div class="lock-time">${t}</div><div style="color:rgba(255,255,255,0.7);font-size:15px">${d}</div><div class="lock-hint">Click to unlock</div>`;
+  }
+};
+const IdleLock={
+  timer:null,
+  reset(){
+    clearTimeout(this.timer);
+    if(!Settings.get().autoLockEnabled||Lock.el)return;
+    const mins=Math.max(1,Number(Settings.get().autoLockMinutes)||5);
+    this.timer=setTimeout(()=>{if(!Lock.el)Lock.show()},mins*60000);
+  },
+  init(){
+    ["mousemove","mousedown","keydown","touchstart","wheel"].forEach(evt=>window.addEventListener(evt,()=>this.reset(),{passive:true}));
+    this.reset();
   }
 };
 const Boot={
@@ -2267,7 +2491,7 @@ const Boot={
     $("#restartBtn").addEventListener("click",()=>{Store.set("powered",true);location.reload()});
     $("#shutdownBtn").addEventListener("click",()=>Boot.shutdown());
     $("#lockBtn").addEventListener("click",()=>Lock.show());
-    const finish=()=>screen.classList.add("hide");
+    const finish=()=>{screen.classList.add("hide");if(Settings.get().lockOnBoot)setTimeout(()=>Lock.show(),350)};
     screen.addEventListener("click",finish,{once:true});
     setTimeout(finish,1700);
     setTimeout(()=>SFX.startup(),300);
@@ -2350,10 +2574,13 @@ const Shortcuts={
 document.addEventListener("DOMContentLoaded",()=>{
   VFS.load();VFS.ensureInstalledAppsFolder();
   WM.init();Taskbar.init();StartMenu.init();Panels.init();Shortcuts.init();
-  Context.init();Widgets.init();Settings.apply();Clock.start();Boot.init();
+  Context.init();Widgets.init();Settings.apply();Clock.start();Boot.init();IdleLock.init();
   renderDesktopIcons();renderStartApps();
-  setTimeout(()=>NotifCenter.push("Welcome to Web OS 4.2","New: Terminal, Code Editor & PDF Viewer (App Store). Real window snapping + Alt-Tab switcher. Task Manager (Ctrl+Shift+Esc). Drag & drop uploads and zip support in File Manager.","🚀",true),2400);
+  setTimeout(()=>NotifCenter.push("Welcome to Web OS 4.5","New: a real lock screen (startup + idle auto-lock, in Security Center), opt-in desktop notifications that reach you even off-tab, and installable/offline support as a PWA.","🚀",true),2400);
 });
+if("serviceWorker" in navigator){
+  window.addEventListener("load",()=>{navigator.serviceWorker.register("sw.js").catch(()=>{})});
+}
 window.addEventListener("online",()=>Widgets.tick());
 window.addEventListener("offline",()=>Widgets.tick());
 window.addEventListener("resize",()=>{

@@ -489,6 +489,13 @@ select.select{
 .crumb:hover,.crumb.current{color:var(--text);background:var(--accent-soft)}
 .crumb-sep{color:var(--muted);font-size:11px}
 .folder-grid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px;align-content:start;overflow-y:auto;padding:4px;border-radius:10px;transition:background .15s,outline-color .15s;outline:2px dashed transparent;outline-offset:-4px}
+.files-body{display:flex;gap:10px;flex:1;min-height:0}
+.files-sidebar{flex:0 0 128px;width:128px;display:flex;flex-direction:column;gap:2px;padding:6px;border-radius:10px;background:var(--control);overflow-y:auto}
+.files-nav-item{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;border:none;background:transparent;color:var(--text);font-size:12.5px;cursor:pointer;text-align:left;width:100%;font-family:inherit}
+.files-nav-item:hover{background:var(--control-2)}
+.files-nav-item.active{background:var(--accent-soft);color:#fff;font-weight:600}
+.files-nav-icon{font-size:15px;width:18px;text-align:center;flex-shrink:0}
+.files-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px;min-height:0}
 .folder-grid.drag-over{background:var(--accent-soft);outline-color:var(--accent)}
 .file-tile{
   border:1px solid transparent;border-radius:14px;
