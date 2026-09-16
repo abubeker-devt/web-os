@@ -4,7 +4,9 @@ A responsive browser-based desktop environment for desktop and mobile, built wit
 
 ## 🌐 Live Demo
 
-👉 Open Web OS
+👉 [Open Web OS](https://abubeker-devt.github.io/web-os/)
+
+
 
 ## 👨‍💻 Developer
 
@@ -106,16 +108,18 @@ Earth Sciences student at Addis Ababa University and Web Development student at 
 - Web Audio API
 - Service Worker / PWA
 
-## 📚 Version History
+ ## 📚 Version History
 
-- **V1** — Initial Web OS desktop
-- **V2** — Advanced desktop features
-- **V3** — Advanced Web OS features and dynamic applications
-- **V4.1** — Improved File Manager, Camera app, mobile improvements, and notifications
-- **V4.3** — System and data management
-- **V4.4** — Security Center, Phone Link, Photos, and additional system features
-- **V4.5** — Lock screen, browser notifications, and PWA/offline support
-- **V4.6.3** — Latest improvements and additional Web OS features
+| Version | Description | Commit |
+|---|---|---|
+| **V1** | Initial Web OS desktop | [View](https://github.com/abubeker-devt/web-os/commit/cee2e29) |
+| **V2** | Advanced desktop features | [View](https://github.com/abubeker-devt/web-os/commit/0e3596e) |
+| **V3** | Advanced features and dynamic applications | [View](https://github.com/abubeker-devt/web-os/commit/6b7277f) |
+| **V4.1** | Improved File Manager, Camera, mobile UI, and notifications | [View](https://github.com/abubeker-devt/web-os/commit/581674e) |
+| **V4.3** | System and data management | [View](https://github.com/abubeker-devt/web-os/commit/0d967b9) |
+| **V4.4** | Security Center, Phone Link, Photos, and system improvements | — |
+| **V4.5** | Lock screen and PWA/offline support | [View](https://github.com/abubeker-devt/web-os/commit/0fde6e3) |
+| **V4.6.3** | Latest Web OS improvements | [View commit](https://github.com/abubeker-devt/web-os/commit/b4ff6000c235a2b507d9045611d374b3f165d746) |
 
 ## 🚀 Run
 
