@@ -7,12 +7,11 @@ A responsive browser-based desktop environment for desktop and mobile, built wit
 👉 [Open Web OS](https://abubeker-devt.github.io/web-os/)
 
 
-
 ## 👨‍💻 Developer
 
-**Abubeker Muhidin Seid**
+Abubeker Muhidin
 
-Earth Sciences student at Addis Ababa University and Web Development student at Rise Up Tech Solutions.
+Built as a learning and portfolio project while developing skills in frontend web development.
 
 ## ✨ V4.6.3 — Latest Features & Improvements
 
